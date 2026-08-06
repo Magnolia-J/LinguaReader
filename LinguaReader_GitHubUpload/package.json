@@ -1,0 +1,16 @@
+{
+  "name": "linguareader-workspace",
+  "version": "1.1.0",
+  "description": "LinguaReader Workspace — 外语原版书精读与知识库工作台（含后端持久化与 LLM 智能批注）",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
