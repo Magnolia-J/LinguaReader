@@ -1,0 +1,30 @@
+# Render 部署配置（免费 Web 服务）
+# 在 Render 控制台「New → Web Service → 连接 GitHub 仓库」后，Render 会自动读取本文件。
+# 也可不依赖本文件，手动在 Dashboard 设置：Build Command = npm install，Start Command = node server.js。
+services:
+  - type: web
+    name: linguareader
+    runtime: node
+    plan: free
+    region: oregon      # 可选：sin1(新加坡)/frankfurt/ohio 等，离你近则改之
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/config
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PORT
+        sync: false      # Render 自动注入，无需填
+      # ---- 以下为可选安全/持久化项，按需在 Render Dashboard 填写 ----
+      - key: LR_TOKEN
+        sync: false      # 建议设置一个随机长字符串，作为公网访问令牌（手机端 ⚙ 里填同样的）
+      - key: SUPABASE_URL
+        sync: false      # 填 https://xxxx.supabase.co（与 supabase-config.js 同项目）
+      - key: SUPABASE_SERVICE_ROLE
+        sync: false      # 填 Supabase 后台的 service_role 密钥（仅服务端，切勿泄露）
+      - key: LR_USER_ID
+        sync: false      # 可选，默认固定 UUID；云端 store 存于 kb_store 该 user_id 行
+      - key: LLM_API_KEY
+        sync: false      # 如需手机端也能触发 AI 分析，填 DeepSeek Key（否则仅桌面端有 AI）
+      - key: LLM_MODEL
+        sync: false

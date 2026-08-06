@@ -1,0 +1,18 @@
+# GitLab Pages 部署配置
+# 说明：仓库内的 public/ 目录即为站点根（public/index.html 是手机端云端页面）。
+# 推送到默认分支（main）后，GitLab CI 会自动构建并发布到：
+#   https://<你的用户名>.gitlab.io/<项目名>/
+# 例如本项目：https://jyulan47-hub.gitlab.io/LinguaReader/
+
+image: alpine:latest
+
+pages:
+  stage: deploy
+  script:
+    - echo "Deploying public/ to GitLab Pages…"
+    - test -f public/index.html && echo "index.html found" || echo "WARN: public/index.html missing"
+  artifacts:
+    paths:
+      - public
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
