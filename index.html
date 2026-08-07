@@ -82,6 +82,26 @@
   }
   .chip.on { color: #fff; background: var(--brand); border-color: var(--brand); }
   .kb-filter-label { font-size: 12px; color: var(--sub); font-weight: 700; margin: 8px 2px 4px; }
+  .kb-select {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 36px 10px 12px;
+    margin: 2px 0 4px;
+    font-size: 14px;
+    color: var(--text, #1a2233);
+    background-color: var(--panel, #fff);
+    border: 1px solid var(--border, #d8dee9);
+    border-radius: 10px;
+    -webkit-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%238a94a6' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    cursor: pointer;
+  }
+  .kb-select:focus { outline: none; border-color: var(--brand, #2f6df6); }
+  .kb-filter-row { display: flex; gap: 10px; margin-top: 6px; }
+  .kb-filter-col { flex: 1 1 0; min-width: 0; }
 
   .kb-card {
     background: var(--card); border: 1px solid var(--line); border-radius: 16px;
@@ -201,9 +221,16 @@
 <div class="wrap">
   <section class="panel on" id="panel-kb">
     <input class="search" id="kb-search" type="search" placeholder="🔍 搜索词条 / 书名 / 释义…" />
-    <div class="chips" id="kb-cats"></div>
-    <div class="kb-filter-label">📚 按书籍筛选</div>
-    <div class="chips" id="kb-books"></div>
+    <div class="kb-filter-row">
+      <div class="kb-filter-col">
+        <div class="kb-filter-label">🗂 分类</div>
+        <select id="kb-cats" class="kb-select"></select>
+      </div>
+      <div class="kb-filter-col">
+        <div class="kb-filter-label">📚 书籍</div>
+        <select id="kb-books" class="kb-select"></select>
+      </div>
+    </div>
     <div id="kb-list"></div>
   </section>
 
@@ -394,8 +421,9 @@ function renderKbCats(){
   const cats = Array.from(new Set((DATA.kb||[]).map(x => x.category)));
   const el = document.getElementById("kb-cats");
   const all = ["all", ...cats];
-  el.innerHTML = all.map(c => `<div class="chip ${c===kbCat?"on":""}" data-cat="${esc(c)}">${c==="all"?"全部":(CAT_LABELS[c]||c)}</div>`).join("");
-  el.querySelectorAll(".chip").forEach(ch => ch.addEventListener("click", () => { kbCat = ch.dataset.cat; renderKbCats(); renderKbBooks(); renderKb(); }));
+  el.innerHTML = all.map(c => `<option value="${esc(c)}">${c==="all"?"全部":(CAT_LABELS[c]||c)}</option>`).join("");
+  el.value = kbCat;
+  el.onchange = () => { kbCat = el.value; renderKbBooks(); renderKb(); };
 }
 function renderKbBooks(){
   const kb = DATA.kb || [];
@@ -406,8 +434,9 @@ function renderKbBooks(){
   if (kbBook && !books.includes(kbBook)) kbBook = ""; // 选中书不在当前分类则重置
   const el = document.getElementById("kb-books");
   const all = ["", ...books];
-  el.innerHTML = all.map(b => `<div class="chip ${b===kbBook?"on":""}" data-book="${esc(b)}">${b===""?"全部书籍":(esc(b)+" ("+(counts[b]||0)+")")}</div>`).join("");
-  el.querySelectorAll(".chip").forEach(ch => ch.addEventListener("click", () => { kbBook = ch.dataset.book; renderKbBooks(); renderKb(); }));
+  el.innerHTML = all.map(b => `<option value="${esc(b)}">${b===""?"全部书籍":(esc(b)+" ("+(counts[b]||0)+")")}</option>`).join("");
+  el.value = kbBook;
+  el.onchange = () => { kbBook = el.value; renderKb(); };
 }
 function kbMatches(item){
   const q = kbQ.trim().toLowerCase();
