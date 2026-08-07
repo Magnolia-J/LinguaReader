@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#6c5ce7" />
+  <title>LinguaReader Workspace · 外语精读工作台</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128214;</text></svg>" />
+  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128214;</text></svg>" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- 顶部栏 -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-logo">📖</span>
+      <div>
+        <div class="brand-title">LinguaReader Workspace</div>
+        <div class="brand-sub">外语原版书 · 精读与知识库工作台</div>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <button id="autosave-status" class="autosave-status" type="button" title="所有改动都会自动保存到本机服务；点此可立即保存当前阅读进度">💾 自动保存</button>
+      <span id="ai-status" class="ai-status off">🟡 AI 演示模式</span>
+      <span id="reading-status" class="reading-status">未选择书籍</span>
+      <span id="reading-timer" class="reading-timer hidden">⏱ 00:00</span>
+      <div class="top-stats" id="top-stats" title="阅读时长与打卡（点击「阅读统计」查看详情）">
+        <span class="ts"><span class="ts-k">今日</span><b id="ts-today">0s</b></span>
+        <span class="ts"><span class="ts-k">总</span><b id="ts-total">0s</b></span>
+        <span class="ts" id="ts-checkin"><span class="ts-k">🔥</span><b id="ts-streak">0 天</b></span>
+      </div>
+      <div class="dict-prefs-wrap">
+        <button id="dict-prefs-btn" class="btn btn-ghost" title="选择要显示的词典">⚙ 词典偏好</button>
+        <div id="dict-prefs-popover" class="dict-prefs-popover hidden"></div>
+      </div>
+      <button id="stats-btn" class="btn btn-ghost" title="阅读统计：日历 / 周报 / 月报">📊 阅读统计</button>
+      <button id="cloud-btn" class="btn btn-ghost" title="云同步：把词汇/句型/批注/进度备份到云端，多设备查看">☁ 云同步</button>
+      <button id="export-btn" class="btn btn-primary" title="导出个人知识库">⬇ 导出知识库</button>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <!-- 左栏：我的书库 -->
+    <aside class="panel panel-library">
+      <div class="panel-head">
+        <h2>📚 我的书库</h2>
+        <button id="add-book-btn" class="btn btn-ghost" title="添加书籍（演示）">＋</button>
+      </div>
+      <div class="lib-tools">
+        <input id="lib-search" class="lib-search" type="search" placeholder="🔍 搜索书名 / 作者…" />
+        <div id="lib-cats" class="lib-cats"></div>
+      </div>
+      <div id="book-list" class="book-list"></div>
+    </aside>
+
+    <!-- 中栏：原文阅读区 + AI 精读助手 -->
+    <main class="panel-center">
+      <section class="reading-pane">
+        <div class="pane-head">
+          <div class="pane-title">
+            <span id="book-title">原文阅读区</span>
+            <span id="book-meta" class="book-meta"></span>
+          </div>
+          <div class="chapter-nav">
+            <button id="prev-chap" class="btn btn-ghost">‹ 上一章</button>
+            <select id="chapter-select"></select>
+            <button id="next-chap" class="btn btn-ghost">下一章 ›</button>
+            <button id="annotate-btn" class="btn btn-ghost annotate-btn" title="调用后端 LLM 对全书做智能批注">⚡ 一键智能批注</button>
+          </div>
+        </div>
+        <div id="reading-area" class="reading-area">
+          <p class="placeholder">从左侧书库选择一本书开始阅读。选中文本即可调用 AI 精读助手进行分析。</p>
+        </div>
+      </section>
+
+      <section class="ai-pane">
+        <div class="pane-head">
+          <div class="pane-title">🤖 AI 精读助手</div>
+          <div id="ai-mode-badge" class="ai-mode-badge">待命</div>
+        </div>
+        <div id="ai-panel" class="ai-panel">
+          <div class="ai-placeholder">
+            <p>选中原文中的内容，这里会：</p>
+            <ul>
+              <li>识别类型（单词 / 短语 / 表达 / 句子 / 段落）</li>
+              <li>自动调用对应的分析模式</li>
+              <li>推荐智能标签并收藏进知识库</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- 右栏：我的语言知识库 -->
+    <aside class="panel panel-kb">
+      <div class="panel-head">
+        <h2>🗂 我的语言知识库</h2>
+      </div>
+      <div class="kb-tools">
+        <select id="kb-filter" class="kb-filter-select">
+          <option value="all">全部分类</option>
+          <option value="vocabulary">Vocabulary 词汇</option>
+          <option value="expressions">Expressions 表达</option>
+          <option value="sentencePatterns">Sentence Patterns 句型</option>
+          <option value="beautifulSentences">Beautiful Sentences 精彩句</option>
+          <option value="writingMaterials">Writing Materials 写作素材</option>
+          <option value="literary">Literary Notes 文学笔记</option>
+          <option value="annotation">批注 Annotation</option>
+        </select>
+        <select id="kb-book-filter" class="kb-filter-select">
+          <option value="">全部书籍</option>
+        </select>
+      </div>
+      <div id="kb-stats" class="kb-stats"></div>
+      <div id="kb-list" class="kb-list"></div>
+      <div class="panel-foot">
+        <button id="clear-kb-btn" class="btn btn-ghost btn-sm">清空知识库</button>
+        <small id="kb-count">0 条</small>
+      </div>
+    </aside>
+  </div>
+
+  <!-- 移动端底部标签栏（窄屏显示，桌面隐藏） -->
+  <nav id="bottom-tabs" class="bottom-tabs" aria-label="主导航">
+    <button class="tab-btn active" data-tab="library" type="button">
+      <span class="tab-ico">📚</span><span class="tab-label">书库</span>
+    </button>
+    <button class="tab-btn" data-tab="reading" type="button">
+      <span class="tab-ico">📖</span><span class="tab-label">阅读</span>
+    </button>
+    <button class="tab-btn" data-tab="kb" type="button">
+      <span class="tab-ico">🗂</span><span class="tab-label">知识库</span>
+    </button>
+    <button class="tab-btn" data-tab="stats" type="button">
+      <span class="tab-ico">📊</span><span class="tab-label">统计</span>
+    </button>
+  </nav>
+
+  <!-- 划线浮动工具条 -->
+  <div id="selection-popup" class="selection-popup hidden">
+    <button data-action="analyze" class="sp-btn">AI 分析</button>
+    <button data-action="save" class="sp-btn">直接收藏</button>
+    <button data-action="annotate" class="sp-btn">✍ 写批注</button>
+  </div>
+
+  <!-- 上传书籍弹窗 -->
+  <div id="upload-modal" class="modal hidden">
+    <div class="modal-card upload-card">
+      <div class="modal-head">
+        <h3>上传书籍</h3>
+        <button class="modal-close" data-close-upload>×</button>
+      </div>
+      <p class="modal-desc">支持 <b>.txt / .md</b>（自动分章、识别书名/作者/语言）；<b>.epub</b> 自动解析；PDF 请先转为纯文本。</p>
+      <div id="drop-zone" class="drop-zone">
+        <div class="dz-icon">⬆</div>
+        <div>拖拽文件到此处，或 <label class="dz-link">点击选择
+          <input id="file-input" type="file" accept=".txt,.md,.text,.epub" hidden></label></div>
+        <div class="dz-formats">.txt · .md · .epub</div>
+      </div>
+      <div class="paste-box">
+        <textarea id="paste-text" placeholder="或将书籍纯文本粘贴到这里（适合 PDF 转出的文本）…"></textarea>
+        <div class="paste-row">
+          <input id="paste-title" class="inp" placeholder="书名（可选）">
+          <input id="paste-author" class="inp" placeholder="作者（可选）">
+          <button id="paste-import" class="btn btn-primary">导入文本</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 书籍元数据确认弹窗 -->
+  <div id="meta-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3>确认书籍信息</h3>
+        <button class="modal-close" data-close-meta>×</button>
+      </div>
+      <div class="meta-form">
+        <label>书名<input id="meta-title" class="inp"></label>
+        <label>作者<input id="meta-author" class="inp"></label>
+        <label>语言
+          <select id="meta-lang" class="inp">
+            <option value="fr">Français 法文</option>
+            <option value="en">English 英文</option>
+          </select>
+        </label>
+        <label>分类<input id="meta-category" class="inp" placeholder="如：小说 / 教材 / 童话（留空则按语言）"></label>
+        <div class="meta-stats" id="meta-stats"></div>
+      </div>
+      <div class="meta-actions">
+        <button id="meta-cancel" class="btn">取消</button>
+        <button id="meta-confirm" class="btn btn-primary">加入书库</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 导出弹窗 -->
+  <div id="export-modal" class="modal hidden">
+    <div class="modal-card export-card">
+      <div class="modal-head">
+        <h3>导出个人知识库</h3>
+        <button class="modal-close" data-close>×</button>
+      </div>
+      <p class="modal-desc">先选择要导出的<b>书籍</b>与<b>内容类型</b>，再选格式。手机查看请优先选 <b>HTML</b> 或 <b>.docx</b>（旧版 .doc 手机常打不开）。Excel/CSV 会按所选类型分别生成独立文件（如仅勾词汇+句型 → 两个文件）。<b>所有词典释义都会一并导出</b>。</p>
+      <div class="export-filter">
+        <div class="ef-col">
+          <div class="ef-head">📚 选择书籍 <span class="ef-all" id="export-all-books">全选</span></div>
+          <div class="ef-list" id="export-book-list"><!-- 由 app.js 动态填充 --></div>
+        </div>
+        <div class="ef-col">
+          <div class="ef-head">🗂 内容类型 <span class="ef-all" id="export-all-cats">全选</span></div>
+          <div class="ef-list" id="export-cat-list">
+            <label class="ef-item"><input type="checkbox" value="vocabulary" checked> 🔤 词汇</label>
+            <label class="ef-item"><input type="checkbox" value="expressions" checked> ✨ 表达</label>
+            <label class="ef-item"><input type="checkbox" value="sentencePatterns" checked> 🧩 句型</label>
+            <label class="ef-item"><input type="checkbox" value="beautifulSentences" checked> 🌟 精彩句</label>
+            <label class="ef-item"><input type="checkbox" value="writingMaterials" checked> ✍️ 写作素材</label>
+            <label class="ef-item"><input type="checkbox" value="literary" checked> 📖 文学笔记</label>
+            <label class="ef-item"><input type="checkbox" value="annotation" checked> 📝 批注</label>
+          </div>
+        </div>
+      </div>
+      <div class="export-options">
+        <label class="ef-item ef-check"><input type="checkbox" id="export-original-form"> 🔤 显示原文词形（勾选后额外导出「原文形式」，默认仅导出原型 Lemma）</label>
+      </div>
+      <div class="export-formats">
+        <button class="btn btn-primary export-do" data-fmt="markdown">📝 Markdown（全文）</button>
+        <button class="btn export-do" data-fmt="excel">📊 Excel / CSV（分库）</button>
+        <button class="btn export-do" data-fmt="word">📄 Word（.docx）</button>
+        <button class="btn export-do" data-fmt="html">🌐 HTML（手机直接预览）</button>
+        <button class="btn export-do" data-fmt="notion">🧩 Notion</button>
+        <button class="btn export-do" data-fmt="obsidian">🪨 Obsidian</button>
+      </div>
+      <p class="export-note" id="export-note"></p>
+    </div>
+  </div>
+
+  <!-- 写批注弹窗（两步：写内容 → 选分类 + 是否导出） -->
+  <div id="annotation-modal" class="modal hidden">
+    <div class="modal-card anno-card">
+      <div class="modal-head">
+        <h3>✍ 写批注</h3>
+        <button class="modal-close" data-close-anno>×</button>
+      </div>
+      <!-- 第一步：写批注内容 -->
+      <div id="anno-step-text">
+        <div class="anno-quote" id="anno-quote"></div>
+        <textarea id="anno-note" class="anno-textarea" placeholder="写下你的批注 / 想法 / 感悟…"></textarea>
+        <div class="anno-actions">
+          <button class="btn" data-close-anno>取消</button>
+          <button class="btn btn-primary" id="anno-next">下一步：选择分类 ›</button>
+        </div>
+      </div>
+      <!-- 第二步：选择分类 + 是否导出（写完后自动跳出） -->
+      <div id="anno-step-type" class="hidden">
+        <p class="modal-desc">这条批注属于哪一类？以及是否纳入导出。</p>
+        <div class="anno-types" id="anno-types"></div>
+        <div class="anno-add-wrap" id="anno-add-wrap">
+          <button class="btn btn-ghost anno-add-btn" id="anno-add-type" type="button">➕ 自定义分类</button>
+        </div>
+        <label class="anno-export"><input type="checkbox" id="anno-exportable" checked> 📤 纳入导出（取消勾选则导出时跳过此条）</label>
+        <div class="anno-actions">
+          <button class="btn" id="anno-back">‹ 返回</button>
+          <button class="btn btn-primary" id="anno-finish">完成</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 阅读统计弹窗：日历视图 / 周报 / 月报 -->
+  <div id="stats-modal" class="modal hidden">
+    <div class="modal-card stats-card">
+      <div class="modal-head">
+        <h3>📊 阅读统计</h3>
+        <button class="modal-close" data-close-stats>×</button>
+      </div>
+      <div class="stats-tabs">
+        <button class="stats-tab active" data-tab="calendar">📅 日历视图</button>
+        <button class="stats-tab" data-tab="week">📈 周报</button>
+        <button class="stats-tab" data-tab="month">📊 月报</button>
+      </div>
+      <div class="stats-body">
+        <div id="tab-calendar" class="stats-tab-panel"></div>
+        <div id="tab-week" class="stats-tab-panel hidden"></div>
+        <div id="tab-month" class="stats-tab-panel hidden"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 云同步弹窗（Supabase） -->
+  <div id="cloud-modal" class="modal hidden">
+    <div class="modal-card cloud-card">
+      <div class="modal-head">
+        <h3>☁ 云同步（Supabase）</h3>
+        <button class="modal-close" data-close-cloud>×</button>
+      </div>
+      <div id="cloud-logged-out">
+        <p class="modal-desc">登录后，词汇 / 句型 / 批注 / 阅读进度会同步到云端；电脑和手机登录同一账号即可多端查看。数据按 id 合并，多设备不会互相覆盖或丢失。</p>
+        <label class="cloud-field">邮箱<input id="cloud-email" class="inp" type="email" placeholder="you@example.com" autocomplete="email"></label>
+        <label class="cloud-field">密码<input id="cloud-pass" class="inp" type="password" placeholder="至少 6 位" autocomplete="current-password"></label>
+        <div class="cloud-actions">
+          <button class="btn btn-primary" id="cloud-signin">登录</button>
+          <button class="btn" id="cloud-signup">注册新账号</button>
+        </div>
+        <p class="cloud-hint" id="cloud-hint">还没有账号？点「注册新账号」即可创建（邮箱 + 密码）。</p>
+      </div>
+      <div id="cloud-logged-in" class="hidden">
+        <p class="modal-desc">已登录云端，数据已同步。</p>
+        <p class="cloud-status" id="cloud-status-text">数据已同步到云端，任意改动会自动上传（约每 4 秒），并每 60 秒拉取一次云端更新。</p>
+        <div class="cloud-actions">
+          <button class="btn btn-primary" id="cloud-sync-now">立即同步</button>
+          <button class="btn" id="cloud-signout">退出登录</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Supabase 云同步：CDN 提供全局 supabase；配置与同步逻辑 -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/supabase-config.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/sync.js"></script>
+  <script src="js/books.js"></script>
+  <script src="js/analysis.js"></script>
+  <script src="js/lemma.js"></script>
+  <script src="js/knowledgebase.js"></script>
+  <script src="js/upload.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/stats.js"></script>
+  <!-- 轻量提示 toast -->
+  <div id="toast" class="toast" aria-live="polite"></div>
+</body>
+</html>
