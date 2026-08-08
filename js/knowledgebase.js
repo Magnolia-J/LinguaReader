@@ -14,6 +14,16 @@ const CATEGORY_LABEL = {
   annotation: "批注 Annotation"
 };
 
+/* AI 面板标签 → 知识库分类键（用户点选标签后，入库主分类按标签走） */
+const TAG_TO_CATEGORY = {
+  "Vocabulary": "vocabulary",
+  "Sentence Pattern": "sentencePatterns",
+  "Native Expression": "expressions",
+  "Beautiful Sentence": "beautifulSentences",
+  "Writing Material": "writingMaterials",
+  "Literary Analysis": "literary"
+};
+
 /* 批注类型（写批注第二步选择）：默认四个 + 用户自定义 */
 const ANNOTATION_TYPES = ["启发性观点", "联想的例子", "疑问", "其他"];
 const ANNO_TYPES_KEY = "lingua_anno_custom_types";
@@ -114,6 +124,72 @@ function loadKbBackup() {
     return Array.isArray(arr) ? arr : [];
   } catch (e) { return []; }
 }
+
+/* ---------- 用户确认的原型（Lemma）覆盖表 ----------
+ * key = `${lang}|${surfaceLower}` → 原型字符串。
+ * 优先级：用户显式编辑 > AI 识别 > 本地 lemmatize。
+ * 再次遇到相同词条时，优先使用此处已确认的原型，不再被 AI 覆盖。 */
+const LEMMA_LS_KEY = "lr_lemma_overrides_v1";
+let LEMMA_OVERRIDES = {};
+function loadLemmaOverrides() {
+  try {
+    const raw = localStorage.getItem(LEMMA_LS_KEY);
+    LEMMA_OVERRIDES = raw ? JSON.parse(raw) : {};
+    if (!LEMMA_OVERRIDES || typeof LEMMA_OVERRIDES !== "object") LEMMA_OVERRIDES = {};
+  } catch (e) { LEMMA_OVERRIDES = {}; }
+}
+function saveLemmaOverrides() {
+  try { localStorage.setItem(LEMMA_LS_KEY, JSON.stringify(LEMMA_OVERRIDES)); } catch (e) { /* 容量满忽略 */ }
+}
+function lemmaOverrideKey(lang, surface) {
+  return (lang || "?") + "|" + String(surface || "").trim().toLowerCase();
+}
+/* 取用户确认的原型：先查覆盖表，再回退 KB 中已确认原型的同形条目 */
+function getLemmaOverride(lang, surface) {
+  const key = lemmaOverrideKey(lang, surface);
+  if (LEMMA_OVERRIDES[key]) return LEMMA_OVERRIDES[key];
+  const sf = String(surface || "").trim().toLowerCase();
+  if (!sf) return null;
+  const hit = KB.find((e) => e.category === "vocabulary" && e.fields && e.fields.lemmaConfirmed && (function () {
+    const f = e.fields;
+    const s = (f.originalForm && String(f.originalForm).trim()) || (f.word && String(f.word).trim()) || "";
+    return s.toLowerCase() === sf;
+  })() && bookLangOf(e.book) === lang);
+  return hit ? hit.fields.word : null;
+}
+/* 写入用户确认的原型：更新覆盖表 + 同步已有 KB 条目 + 异步备份到服务端 */
+function setLemmaOverride(lang, surface, lemma) {
+  if (!lang || !surface) return;
+  const key = lemmaOverrideKey(lang, surface);
+  const val = String(lemma || "").trim();
+  if (!val) return;
+  LEMMA_OVERRIDES[key] = val;
+  saveLemmaOverrides();
+  if (window.ApiClient) ApiClient.setLemmaOverride(key, val).catch(() => {});
+  // 同步已有 KB 条目（同语言、同原文词形）改为新原型并标记已确认
+  const sf = String(surface).trim().toLowerCase();
+  KB.forEach((e) => {
+    if (e.category !== "vocabulary") return;
+    const f = e.fields || {};
+    const s = (f.originalForm && String(f.originalForm).trim()) || (f.word && String(f.word).trim()) || "";
+    if (s.toLowerCase() === sf && bookLangOf(e.book) === lang) {
+      f.word = val;
+      f.lemmaConfirmed = true;
+      if (window.ApiClient) ApiClient.updateKb(e.id, { fields: f }).catch(() => {});
+    }
+  });
+}
+/* 服务端覆盖表合并到本地（云端 / 其他设备同步） */
+function mergeServerLemmaOverrides(obj) {
+  if (!obj || typeof obj !== "object") return;
+  let changed = false;
+  for (const k in obj) {
+    if (obj[k] && !LEMMA_OVERRIDES[k]) { LEMMA_OVERRIDES[k] = obj[k]; changed = true; }
+  }
+  if (changed) saveLemmaOverrides();
+}
+loadLemmaOverrides();
+
 /* 把本地备份里、服务端没有的条目并入内存并（联网时）补传到后端 */
 function reconcileKB() {
   const backup = loadKbBackup();
@@ -127,12 +203,38 @@ function reconcileKB() {
     if (window.ApiClient) ApiClient.addKb(e).catch(() => {});
   });
   if (toUpload.length) renderKB(lastKbFilter);
+  healKbLemmas();
+}
+
+/* ---------- 存量条目词形修复（一次性，幂等） ----------
+ * 早期版本把动词变位直接存进了 KB / 导出。本函数把仍保留变位形式的
+ * vocabulary 条目还原为原型（Lemma），原词形记入 originalForm。
+ * 仅在确定书籍语言时执行，避免把英文词误判为法文。 */
+function healKbLemmas() {
+  if (!KB_USE_LEMMA || typeof lemmatize !== "function") return;
+  let changed = 0;
+  KB.forEach((e) => {
+    const f = e.fields || {};
+    if (e.category === "vocabulary" && f.word && !f.originalForm) {
+      const lang = bookLangOf(e.book);
+      if (!lang) return;
+      const lemma = lemmatize(f.word, lang);
+      if (lemma && lemma !== String(f.word).trim().toLowerCase()) {
+        f.originalForm = f.word;
+        f.word = lemma;
+        changed++;
+        if (window.ApiClient) ApiClient.updateKb(e.id, { fields: f }).catch(() => {});
+      }
+    }
+  });
+  if (changed) { backupKB(); renderKB(lastKbFilter); }
 }
 
 /* ---------- 从后端状态加载（内存缓存） ---------- */
 function loadKB(arr) {
   KB = Array.isArray(arr) ? arr.slice() : [];
   backupKB();
+  healKbLemmas();
   return KB;
 }
 /* 保留占位以兼容旧调用方；实际持久化由 ApiClient 完成 */
@@ -161,15 +263,65 @@ function updateKb(id, patch) {
   if (window.ApiClient) ApiClient.updateKb(id, patch).catch(() => {});
 }
 
+/* 内联编辑原型（Lemma）：把 kb-main 替换为输入框，确认后更新条目 + 写覆盖表 */
+function startLemmaEdit(id) {
+  const e = KB.find((x) => x.id === id);
+  if (!e) return;
+  const item = document.querySelector('.kb-item[data-id="' + id + '"]');
+  if (!item) return;
+  const main = item.querySelector(".kb-main");
+  if (!main) return;
+  const f = e.fields || {};
+  const cur = (f.word && String(f.word).trim()) || "";
+  main.innerHTML = `<input class="kb-lemma-input" type="text" value="${escapeHtml(cur)}" />` +
+    `<button class="kb-lemma-ok" data-id="${id}">✓</button>` +
+    `<button class="kb-lemma-cancel" data-id="${id}">✕</button>`;
+  const input = main.querySelector(".kb-lemma-input");
+  input.focus(); input.select();
+  main.querySelector(".kb-lemma-ok").addEventListener("click", (ev) => { ev.stopPropagation(); commitLemmaEdit(id, input.value); });
+  main.querySelector(".kb-lemma-cancel").addEventListener("click", (ev) => { ev.stopPropagation(); renderKB(lastKbFilter); });
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.stopPropagation(); commitLemmaEdit(id, input.value); }
+    else if (ev.key === "Escape") { ev.stopPropagation(); renderKB(lastKbFilter); }
+  });
+}
+function commitLemmaEdit(id, value) {
+  const newLemma = String(value || "").trim();
+  if (!newLemma) { renderKB(lastKbFilter); return; }
+  const e = KB.find((x) => x.id === id);
+  if (!e) return;
+  const f = e.fields || {};
+  const surface = (f.originalForm && String(f.originalForm).trim()) || (f.word && String(f.word).trim()) || "";
+  const lang = bookLangOf(e.book);
+  f.word = newLemma;
+  f.lemmaConfirmed = true;
+  if (!f.originalForm && surface && surface.toLowerCase() !== newLemma.toLowerCase()) f.originalForm = surface;
+  updateKb(id, { fields: f });
+  if (lang && surface) setLemmaOverride(lang, surface, newLemma);
+  renderKB(lastKbFilter);
+  if (typeof flash === "function") flash("已更新原型为「" + newLemma + "」（同类词条将自动沿用）");
+}
+
 /* 从分析结果构造并保存 */
 function saveFromAnalysis(record, source, tags) {
   const data = record.data || {};
-  // 词形还原：默认仅保存原型（Lemma），原词形存入 originalForm 备用导出
+  // 词形还原优先级：用户已确认原型 > AI 返回原型 > 本地 lemmatize。
+  // 用户确认的原型为最终结果，不再被 AI 覆盖。
   if (KB_USE_LEMMA && data.word && typeof lemmatize === "function") {
-    const lemma = lemmatize(data.word, bookLangOf(source.book));
-    if (lemma && lemma !== String(data.word).trim().toLowerCase()) {
-      data.originalForm = data.word; // 保留原文词形
-      data.word = lemma;             // 入库改为原型
+    const surface = String(data.word).trim();
+    const lang = bookLangOf(source.book);
+    let lemma = null;
+    if (lang && surface) lemma = getLemmaOverride(lang, surface);           // 1) 用户已确认优先
+    if (!lemma) {                                                          // 2) AI 返回原型（权威，已 WSD）
+      lemma = (data.lemma && String(data.lemma).trim()) ? String(data.lemma).trim().toLowerCase() : null;
+      if (!lemma || lemma === surface.toLowerCase()) lemma = lemmatize(surface, lang); // 3) 本地兜底
+    }
+    if (lemma && lemma !== surface.toLowerCase()) {
+      data.originalForm = surface; // 保留原文词形（变位形式）
+      data.word = lemma;           // 入库改为原型
+      data.lemmaConfirmed = true;
+    } else if (lemma && lemma === surface.toLowerCase()) {
+      data.lemmaConfirmed = true;  // 原词即原型（用户/AI 确认）
     }
   }
   return addEntry({
@@ -277,6 +429,7 @@ function defsToTextForExport(defs, filter) {
 function formatFieldValue(k, v, filter) {
   if (k === "learningValue") return ""; // 导出不含 learning value
   if (k === "originalForm") return "";  // 原文词形由导出「显示原文词形」选项单独处理
+  if (k === "lemmaConfirmed") return ""; // 原型确认内部标记，不导出
   if (k === "defs" && Array.isArray(v)) return defsToTextForExport(v, filter);
   if (Array.isArray(v)) return v.map(x => (typeof x === "object" ? JSON.stringify(x) : x)).join("；");
   if (v && typeof v === "object") return JSON.stringify(v);
@@ -398,6 +551,7 @@ function paintKbItems(list, items, prefixHtml) {
     return `<div class="kb-item" data-id="${e.id}">
       <button class="kb-del" data-id="${e.id}" title="删除这条">✕</button>
       <div class="kb-cat">${CATEGORY_LABEL[e.category] || e.category}</div>
+      ${e.category === "vocabulary" ? `<button class="kb-lemma-edit" data-id="${e.id}" title="编辑原型（Lemma）">✎ 原型</button>` : ""}
       <div class="kb-main">${escapeHtml(entryTitle(e))}</div>
       <div class="kb-sub">${escapeHtml(entrySubtitle(e))}</div>
       <div class="kb-tags">${tags}${extra}</div>
@@ -439,6 +593,13 @@ function paintKbItems(list, items, prefixHtml) {
       removeEntry(id);
       renderKB(lastKbFilter);
       if (typeof flash === "function") flash("已删除该条目");
+    });
+  });
+  // 编辑原型（Lemma）：词汇条目内联改成原型（用户确认后，同类词条自动沿用）
+  list.querySelectorAll(".kb-lemma-edit").forEach(btn => {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      startLemmaEdit(btn.dataset.id);
     });
   });
 }
