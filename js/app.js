@@ -84,6 +84,14 @@ async function init() {
   renderKB("all");
   populateKbBookFilter();
   bindEvents();
+  // 防止浏览器自动填充把登录邮箱/密码填入搜索框：初始化时强制清空
+  const libSearchInit = document.getElementById("lib-search");
+  if (libSearchInit) {
+    libSearchInit.value = "";
+    libSearch = "";
+    renderBookList();
+    setTimeout(() => { libSearchInit.value = ""; libSearch = ""; renderBookList(); }, 100);
+  }
   // 显示 AI 在线状态
   ApiClient.getConfig().then((c) => {
     const el = document.getElementById("ai-status");
@@ -218,6 +226,9 @@ function syncFromState(state) {
   if (state.progress) {
     Object.keys(BOOK_PROGRESS).forEach((k) => delete BOOK_PROGRESS[k]);
     Object.assign(BOOK_PROGRESS, state.progress);
+  }
+  if (state.lemmaOverrides && typeof state.lemmaOverrides === "object" && typeof mergeServerLemmaOverrides === "function") {
+    mergeServerLemmaOverrides(state.lemmaOverrides);
   }
   if (Array.isArray(state.kb)) loadKB(state.kb);
   if (state.prefs && Array.isArray(state.prefs.enabledDicts)) {
@@ -565,6 +576,22 @@ function flushReading() {
     .catch(() => false);
 }
 
+/* 保存当前书籍的具体阅读位置（章节 + 阅读区滚动位置），供「打开即续读」 */
+function saveReadingPosition() {
+  if (!currentBookId) return;
+  const area = document.getElementById("reading-area");
+  const scroll = area ? Math.max(0, Math.round(area.scrollTop)) : 0;
+  const prog = BOOK_PROGRESS[currentBookId];
+  const c = (prog && typeof prog === "object") ? prog.c : (prog || 0);
+  BOOK_PROGRESS[currentBookId] = { c: c, s: scroll, u: Date.now() };
+  if (window.ApiClient) ApiClient.setProgress(currentBookId, c, scroll).catch(() => {});
+}
+let _scrollSaveTimer = null;
+function onReadingScroll() {
+  if (_scrollSaveTimer) clearTimeout(_scrollSaveTimer);
+  _scrollSaveTimer = setTimeout(saveReadingPosition, 800); // 防抖：停止滚动 0.8s 后保存
+}
+
 /* 书卡上的实时时长（含当前未结算秒数） */
 function updateBookTimes() {
   document.querySelectorAll(".bc-time").forEach(span => {
@@ -657,8 +684,10 @@ function selectBook(id) {
   const book = BOOKS.find(b => b.id === id);
   if (!book) return;
   flushReading();                 // 先结算上一本书的时长
+  saveReadingPosition();          // 保存上一本书的具体阅读位置（章节 + 滚动）
   currentBookId = id;
-  currentChapter = BOOK_PROGRESS[id] || 0;
+  const prog = BOOK_PROGRESS[id]; // 进度可能为 {c, s} 对象或旧的数字
+  currentChapter = (prog && typeof prog === "object" ? prog.c : prog) || 0;
   // 记住「上次阅读的书」，重开时续读（先结算再记，避免记到刚切走的书）
   if (window.ApiClient) ApiClient.setLastBook(id).catch(() => {});
   renderBookList();
@@ -691,6 +720,11 @@ function renderReadingArea(book, idx) {
   html += chap.paragraphs.map(p => `<p>${p}</p>`).join("");
   html += `<div class="page-mark">${chap.pages}</div>`;
   area.innerHTML = html;
+  // 恢复到上次停止的具体位置（章节内的滚动位置），实现「打开即续读」
+  const id = currentBookId;
+  const prog = id && BOOK_PROGRESS[id];
+  const s = (prog && typeof prog === "object") ? prog.s : 0;
+  if (s) requestAnimationFrame(() => { area.scrollTop = s; });
 }
 
 /* ---------- 章节导航 ---------- */
@@ -700,8 +734,8 @@ function gotoChapter(delta) {
   let i = currentChapter + delta;
   i = Math.max(0, Math.min(book.chapters.length - 1, i));
   currentChapter = i;
-  BOOK_PROGRESS[book.id] = i;
-  if (window.ApiClient) ApiClient.setProgress(book.id, i).catch(() => {});
+  BOOK_PROGRESS[book.id] = { c: i, s: 0 }; // 切换章节：重置本章滚动位置为顶部
+  if (window.ApiClient) ApiClient.setProgress(book.id, i, 0).catch(() => {});
   renderChapterSelect(book);
   renderReadingArea(book, i);
 }
@@ -732,15 +766,15 @@ function bindEvents() {
   const libSearchEl = document.getElementById("lib-search");
   if (libSearchEl) libSearchEl.addEventListener("input", e => { libSearch = e.target.value; renderBookList(); });
   // 今日打卡已改为「阅读满 1 分钟自动打卡」（见 autoCheckIn），不再需要手动按钮
-  // 离开页面时上报阅读时长（beforeunload + pagehide 双保险；keepalive 保证卸载时也能送达）
-  window.addEventListener("beforeunload", flushReading);
-  window.addEventListener("pagehide", flushReading);
+  // 离开页面时上报阅读时长与具体位置（beforeunload + pagehide 双保险；keepalive 保证卸载时也能送达）
+  window.addEventListener("beforeunload", () => { flushReading(); saveReadingPosition(); });
+  window.addEventListener("pagehide", () => { flushReading(); saveReadingPosition(); });
   // 阅读动作（滚动/点击/键盘/触摸）→ 刷新活跃时间；空闲超 15 分钟会暂停，有动作自动续上
   ["scroll", "keydown", "pointerdown", "wheel", "touchstart"].forEach(ev =>
     window.addEventListener(ev, onReadingActivity, { passive: true }));
-  // 切到后台（切标签 / 最小化 / 关闭）时立即结算，避免时长丢失；切回前台视为有动作，恢复计时
+  // 切到后台（切标签 / 最小化 / 关闭）时立即结算并保存位置，避免丢失；切回前台视为有动作，恢复计时
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") flushReading();
+    if (document.visibilityState === "hidden") { flushReading(); saveReadingPosition(); }
     else onReadingActivity();
   });
   // 章节导航
@@ -749,13 +783,15 @@ function bindEvents() {
   document.getElementById("chapter-select").addEventListener("change", e => {
     currentChapter = +e.target.value;
     const book = BOOKS.find(b => b.id === currentBookId);
-    BOOK_PROGRESS[book.id] = currentChapter;
-    if (window.ApiClient) ApiClient.setProgress(book.id, currentChapter).catch(() => {});
+    BOOK_PROGRESS[book.id] = { c: currentChapter, s: 0 }; // 手动切章：本章从顶部开始
+    if (window.ApiClient) ApiClient.setProgress(book.id, currentChapter, 0).catch(() => {});
     renderReadingArea(book, currentChapter);
   });
   // 阅读区选中 → 弹出工具条（桌面 mouseup + 移动端 selectionchange 双保险）
   const area = document.getElementById("reading-area");
   area.addEventListener("mouseup", onSelection);
+  // 阅读区滚动：防抖保存具体阅读位置（章节内位置），实现「打开即续读」
+  area.addEventListener("scroll", onReadingScroll, { passive: true });
   // 移动端长按选词不会触发 mouseup，用 selectionchange 兜底（桌面也会被它覆盖，幂等）
   document.addEventListener("selectionchange", onSelectionChange);
   // 屏蔽阅读区原生长按菜单（仅当有选区时，让自研弹条成为操作入口；无选区保留系统菜单便于复制）
@@ -1041,27 +1077,147 @@ function onSelectionChange() {
 function hidePopup() { document.getElementById("selection-popup").classList.add("hidden"); }
 
 /* ---------- AI 分析（经后端，可接真实 LLM） ---------- */
-async function doAnalyze(text) {
+/* 从当前选区提取所在完整句子，供 AI 做语境判断 / 词性消歧（WSD） */
+/* 构造「语境参考窗口」：仅取选区所在句 + 前 2 句 + 后 3 句（不发送整章/整本书），
+   用于提升词性消歧准确率；最易变的「待分析选区」本身由调用方放在 prompt 末尾。 */
+function buildContextWindow() {
+  try {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return null;
+    const range = sel.getRangeAt(0);
+    let node = range.startContainer;
+    let el = node.nodeType === 3 ? node.parentElement : node;
+    if (!el) return null;
+    const block = el.closest("p, li, blockquote");
+    const para = block || el;
+    let full = (para && para.textContent) || "";
+    full = full.replace(/\s+/g, " ").trim();
+    if (!full) return null;
+    // 切成句子（保留句末标点以便边界清晰）
+    const sentences = full.match(/[^.!?。！？…]+[.!?。！？…]*/g);
+    if (!sentences || sentences.length <= 1) return full; // 单句/无边界：整段作参考（仍远小于整章）
+    // 选区在段落中的字符偏移（统一按单空格归一化，与 sentences 对齐）
+    const pre = document.createRange();
+    pre.selectNodeContents(para);
+    pre.setEnd(range.startContainer, range.startOffset);
+    const offset = pre.toString().replace(/\s+/g, " ").length;
+    // 定位偏移落在哪一句（严格小于：选区恰在句边界时归下一句，避免偏移上一句）
+    let acc = 0, idx = 0;
+    for (let i = 0; i < sentences.length; i++) {
+      const len = sentences[i].length;
+      if (offset < acc + len) { idx = i; break; }
+      acc += len; idx = i;
+    }
+    const BEFORE = 2, AFTER = 3;
+    const start = Math.max(0, idx - BEFORE);
+    const end = Math.min(sentences.length, idx + AFTER + 1);
+    return sentences.slice(start, end).join(" ").trim();
+  } catch (e) { return null; }
+}
+
+async function doAnalyze(presetText) {
   const book = BOOKS.find(b => b.id === currentBookId);
   if (!book) return;
   const chap = book.chapters[currentChapter];
   currentSource = { book: book.title, author: book.author, page: chap.pages };
+
+  /* —— 统一严格选区：调用 AI 前先校验选区完整，异常则重新获取一次 —— */
+  // 优先用「调用此刻」的真实选区；若已丢失，回退到弹窗捕获的（仍会再做完整校验）
+  let text = (typeof StrictSelect !== "undefined") ? await StrictSelect.acquireStrictSelection() : null;
+  if (!text && presetText && presetText.trim()) {
+    // 实时选区丢失时的兜底：以弹窗捕获文本为准，但要求它确实仍存在于阅读区
+    text = presetText.trim();
+  }
+  if (!text) {
+    flash("未获取到有效选区，请重新选中文本后再分析");
+    return;
+  }
+
+  // 语境参考窗口：仅当前句 ±2~3 句，明确「非分析对象」，绝不发送给 AI 当作输入
+  const context = buildContextWindow();
   flash("正在请求 AI 分析…");
 
   let result;
   try {
     result = await ApiClient.analyze({
-      text, language: book.language, bookTitle: book.title, author: book.author, page: chap.pages
+      text, language: book.language, bookTitle: book.title, author: book.author, page: chap.pages, context
     });
   } catch (e) {
     flash("AI 分析失败：" + e.message);
     return;
   }
+
+  /* —— 完整性校验（兜底）：若最终返回明显未覆盖用户选区，提示而非静默展示 —— */
+  if (typeof StrictSelect !== "undefined" && !StrictSelect.isSelectionCovered(text, result)) {
+    console.warn("[strict-select] AI 返回未完整覆盖选区，已依赖服务端重试；若仍不完整请重试。选区长度=", text.length);
+  }
   currentAnalysis = result;
   renderAIPanel();
 }
 
-/* 渲染 AI 面板（不重新请求 LLM；切换词典偏好时可直接重渲染） */
+/* 单个分析结果里「原型（Lemma）」区块（可编辑：用户确认后不再被 AI 覆盖） */
+function lemmaBlockHtml(analysis) {
+  try {
+    const srcBook = (typeof BOOKS !== "undefined" && currentSource) ? BOOKS.find(b => b.title === currentSource.book) : null;
+    const bookLang = srcBook ? srcBook.language : null;
+    if (analysis.type !== "word" || !analysis.record || !analysis.record.data || !analysis.record.data.word) return "";
+    const raw = String(analysis.record.data.word);
+    const aiLemma = analysis.record.data.lemma ? String(analysis.record.data.lemma).trim() : null;
+    let lm = aiLemma || (typeof lemmatize === "function" ? lemmatize(raw, bookLang) : null);
+    lm = lm ? lm.toLowerCase() : null;
+    const rawL = raw.trim().toLowerCase();
+    if (!lm || lm === rawL) return ""; // 无原型差异则不显示
+    const confirmed = !!analysis.record.data.lemmaConfirmed;
+    return `<div class="ai-block ai-lemma">
+      <h4>原型（Lemma）${confirmed ? ' <span class="ai-lemma-lock" title="已确认，不再被 AI 覆盖">🔒</span>' : ''}</h4>
+      <div class="ai-content">
+        <input class="ai-lemma-edit" type="text" value="${escHtml(lm)}" data-raw="${escHtml(raw)}" data-lang="${escHtml(bookLang || "")}" />
+        <span class="ai-lemma-raw">（原文：${escHtml(raw)}）</span>
+        <button class="ai-lemma-save" data-raw="${escHtml(raw)}" data-lang="${escHtml(bookLang || "")}" data-lemma="${escHtml(lm)}">✓ 确认</button>
+      </div>
+    </div>`;
+  } catch (e) { return ""; }
+}
+
+/* 单个分析结果的 blocks 渲染（含词典过滤、段头） */
+function blocksHtml(analysis) {
+  let html = "";
+  (analysis.blocks || []).forEach(b => {
+    if (b.kind === "reminder") html += `<div class="ai-reminder">${b.html}</div>`;
+    else if (b.kind === "source") html += `<div class="ai-source">${b.html}</div>`;
+    else if (b.kind === "segment") html += `<div class="ai-seg-note">${b.html}</div>`;
+    else {
+      // 词典释义块：按用户勾选的词典即时过滤（无需重跑 LLM）
+      if (b.title === "Dictionary Definition" && analysis.record && Array.isArray(analysis.record.data.defs)) {
+        html += `<div class="ai-block"><h4>${b.title}</h4><div class="ai-content">${renderDefsHtml(analysis.record.data.defs)}</div></div>`;
+        return;
+      }
+      html += `<div class="ai-block"><h4>${b.title}</h4><div class="ai-content">${b.html}</div></div>`;
+    }
+  });
+  return html;
+}
+
+/* 用户在 AI 面板确认原型：写入覆盖表 + 立刻刷新当前结果 */
+function confirmLemmaFromPanel(raw, lang, newLemma) {
+  if (!newLemma) return;
+  if (typeof setLemmaOverride === "function") setLemmaOverride(lang, raw, newLemma);
+  if (currentAnalysis) {
+    const applyTo = (a) => {
+      if (a && a.record && a.record.data && String(a.record.data.word || "").trim().toLowerCase() === String(raw).trim().toLowerCase()) {
+        a.record.data.word = newLemma;
+        a.record.data.lemma = newLemma;
+        a.record.data.lemmaConfirmed = true;
+      }
+    };
+    if (currentAnalysis.segments) currentAnalysis.segments.forEach(applyTo);
+    else applyTo(currentAnalysis);
+  }
+  renderAIPanel();
+  flash("已确认为原型：" + newLemma + "（同类词条将自动沿用）");
+}
+
+/* 渲染 AI 面板（不重新请求 LLM；支持多段合并 + 原型可编辑） */
 function renderAIPanel() {
   if (!currentAnalysis) return;
   const panel = document.getElementById("ai-panel");
@@ -1072,33 +1228,19 @@ function renderAIPanel() {
   if (currentAnalysis.curated) html += `<div class="ai-curated">✓ 真实分析（${currentSource.book}）</div>`;
   else html += `<div class="ai-curated">演示骨架 · 配置 LLM_API_KEY 后自动生成完整分析</div>`;
 
-  // 原型（Lemma）提示：帮助建立原型词汇学习习惯
-  try {
-    const srcBook = (typeof BOOKS !== "undefined" && currentSource) ? BOOKS.find(b => b.title === currentSource.book) : null;
-    const bookLang = srcBook ? srcBook.language : null;
-    if (currentAnalysis.type === "word" && currentAnalysis.record && currentAnalysis.record.data && currentAnalysis.record.data.word) {
-      const raw = currentAnalysis.record.data.word;
-      if (typeof lemmatize === "function") {
-        const lm = lemmatize(raw, bookLang);
-        if (lm && lm !== String(raw).trim().toLowerCase()) {
-          html += `<div class="ai-block ai-lemma"><h4>原型（Lemma）</h4><div class="ai-content"><strong>${escHtml(lm)}</strong>（原文：${escHtml(raw)}）</div></div>`;
-        }
-      }
-    }
-  } catch (e) { /* 展示失败不影响主流程 */ }
-
-  currentAnalysis.blocks.forEach(b => {
-    if (b.kind === "reminder") html += `<div class="ai-reminder">${b.html}</div>`;
-    else if (b.kind === "source") html += `<div class="ai-source">${b.html}</div>`;
-    else {
-      // 词典释义块：按用户勾选的词典即时过滤（无需重跑 LLM）
-      if (b.title === "Dictionary Definition" && currentAnalysis.record && Array.isArray(currentAnalysis.record.data.defs)) {
-        html += `<div class="ai-block"><h4>${b.title}</h4><div class="ai-content">${renderDefsHtml(currentAnalysis.record.data.defs)}</div></div>`;
-        return;
-      }
-      html += `<div class="ai-block"><h4>${b.title}</h4><div class="ai-content">${b.html}</div></div>`;
-    }
-  });
+  // 多段（长文自动分段）合并展示
+  if (currentAnalysis.segments && currentAnalysis.segments.length) {
+    currentAnalysis.segments.forEach((seg, i) => {
+      html += `<div class="ai-seg">`;
+      html += `<div class="ai-seg-head">选区片段 ${i + 1}/${currentAnalysis.segments.length}</div>`;
+      html += lemmaBlockHtml(seg);
+      html += blocksHtml(seg);
+      html += `</div>`;
+    });
+  } else {
+    html += lemmaBlockHtml(currentAnalysis);
+    html += blocksHtml(currentAnalysis);
+  }
 
   // 智能标签
   selectedTags = (currentAnalysis.tags || []).slice();
@@ -1111,6 +1253,16 @@ function renderAIPanel() {
   panel.innerHTML = html;
   document.getElementById("save-analysis").addEventListener("click", saveCurrentAnalysis);
   document.getElementById("copy-analysis").addEventListener("click", copyAnalysis);
+  // 原型「确认」按钮绑定
+  panel.querySelectorAll(".ai-lemma-save").forEach(b => {
+    b.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const raw = b.dataset.raw, lang = b.dataset.lang, lemma = b.dataset.lemma;
+      const input = b.parentElement.querySelector(".ai-lemma-edit");
+      const val = input ? input.value.trim() : lemma;
+      confirmLemmaFromPanel(raw, lang, val);
+    });
+  });
   document.body.setAttribute("data-ai", "open"); // 移动端：有结果才展开 AI 面板
 }
 
@@ -1136,11 +1288,21 @@ function renderTagRow() {
 
 function saveCurrentAnalysis() {
   if (!currentAnalysis) return;
-  saveFromAnalysis(currentAnalysis.record, currentSource, selectedTags);
+  const records = (currentAnalysis.records && currentAnalysis.records.length) ? currentAnalysis.records : [currentAnalysis.record];
+  let saved = 0;
+  records.forEach(r => {
+    if (!r) return;
+    const entry = saveFromAnalysis(r, currentSource, selectedTags);
+    saved++;
+  });
   renderKB(getKbFilter());
   const btn = document.getElementById("save-analysis");
-  btn.textContent = "✓ 已收藏"; btn.disabled = true; btn.classList.add("btn");
-  flash("已收藏到「" + (CATEGORY_LABEL[currentAnalysis.record.category] || "") + "」");
+  if (btn) {
+    btn.textContent = saved > 1 ? ("✓ 已收藏 " + saved + " 条") : "✓ 已收藏";
+    btn.disabled = true; btn.classList.add("btn");
+  }
+  const catName = (currentAnalysis.record && CATEGORY_LABEL[currentAnalysis.record.category]) || "";
+  flash("已收藏到「" + catName + "」" + (saved > 1 ? "（" + saved + " 个片段）" : ""));
 }
 
 function doQuickSave(text) {
@@ -1156,7 +1318,9 @@ function doQuickSave(text) {
 function copyAnalysis() {
   if (!currentAnalysis) return;
   let txt = currentAnalysis.raw + "\n\n";
-  currentAnalysis.blocks.forEach(b => { if (b.title && b.title !== "reminder") txt += b.title + "：\n" + b.html.replace(/<[^>]+>/g, "") + "\n\n"; });
+  const blocksOf = (a) => a.blocks || [];
+  const allBlocks = currentAnalysis.segments ? currentAnalysis.segments.flatMap(blocksOf) : blocksOf(currentAnalysis);
+  allBlocks.forEach(b => { if (b.title && b.title !== "reminder") txt += b.title + "：\n" + b.html.replace(/<[^>]+>/g, "") + "\n\n"; });
   navigator.clipboard.writeText(txt).then(() => flash("已复制分析全文"));
 }
 

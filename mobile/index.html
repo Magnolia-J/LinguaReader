@@ -35,15 +35,16 @@
     box-shadow: var(--shadow);
     display: flex; align-items: center; gap: 10px;
   }
-  header h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: .3px; flex: 1; }
-  header .src { font-size: 11px; opacity: .9; margin-top: 2px; }
+  header h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: .3px; flex: 1; display: flex; align-items: center; min-width: 0; }
+  header h1 .title-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  header .src { font-size: 12px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: rgba(255,255,255,.92); }
   .hbtn {
     background: rgba(255,255,255,.18); color: #fff; border: none; border-radius: 10px;
     width: 38px; height: 38px; font-size: 18px; cursor: pointer; flex: 0 0 auto;
     display: flex; align-items: center; justify-content: center;
   }
   .hbtn:active { background: rgba(255,255,255,.32); }
-  .mode-pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(255,255,255,.2); margin-left: 6px; }
+  .mode-pill { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: rgba(255,255,255,.22); margin-left: 6px; white-space: nowrap; display: inline-block; vertical-align: middle; flex: 0 0 auto; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
 
   .tabs {
     position: sticky; top: 0; z-index: 19;
@@ -75,6 +76,27 @@
     background: var(--card); color: var(--sub); border: 1px solid var(--line); cursor: pointer; white-space: nowrap;
   }
   .chip.on { color: #fff; background: var(--brand); border-color: var(--brand); }
+  .kb-filter-label { font-size: 12px; color: var(--sub); font-weight: 700; margin: 8px 2px 4px; }
+  .kb-select {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 36px 10px 12px;
+    margin: 2px 0 4px;
+    font-size: 14px;
+    color: var(--text, #1a2233);
+    background-color: var(--panel, #fff);
+    border: 1px solid var(--border, #d8dee9);
+    border-radius: 10px;
+    -webkit-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%238a94a6' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    cursor: pointer;
+  }
+  .kb-select:focus { outline: none; border-color: var(--brand, #2f6df6); }
+  .kb-filter-row { display: flex; gap: 10px; margin-top: 6px; }
+  .kb-filter-col { flex: 1 1 0; min-width: 0; }
 
   /* 知识库卡片 */
   .kb-card {
@@ -142,8 +164,8 @@
 </head>
 <body>
 <header>
-  <div style="flex:1">
-    <h1>📖 LinguaReader · 手机端<span class="mode-pill" id="mode-pill">…</span></h1>
+  <div style="flex:1;min-width:0">
+    <h1><span class="title-text">📖 LinguaReader · 手机端</span><span class="mode-pill" id="mode-pill">…</span></h1>
     <div class="src" id="src">连接中…</div>
   </div>
   <button class="hbtn" id="refresh-btn" title="刷新">↻</button>
@@ -157,8 +179,17 @@
 
 <div class="wrap">
   <section class="panel on" id="panel-kb">
-    <input class="search" id="kb-search" type="search" placeholder="🔍 搜索词条 / 书名 / 释义…" />
-    <div class="chips" id="kb-cats"></div>
+    <input class="search" id="kb-search" type="search" placeholder="🔍 搜索词条 / 书名 / 释义…" autocomplete="off" />
+    <div class="kb-filter-row">
+      <div class="kb-filter-col">
+        <div class="kb-filter-label">🗂 分类</div>
+        <select id="kb-cats" class="kb-select"></select>
+      </div>
+      <div class="kb-filter-col">
+        <div class="kb-filter-label">📚 书籍</div>
+        <select id="kb-books" class="kb-select"></select>
+      </div>
+    </div>
     <div id="kb-list"></div>
   </section>
 
@@ -274,13 +305,27 @@ async function loadData(){
 }
 
 /* ---------- 知识库渲染 ---------- */
-let kbCat = "all", kbQ = "";
+let kbCat = "all", kbQ = "", kbBook = "";
 function renderKbCats(){
   const cats = Array.from(new Set((DATA.kb||[]).map(x => x.category)));
   const el = document.getElementById("kb-cats");
   const all = ["all", ...cats];
-  el.innerHTML = all.map(c => `<div class="chip ${c===kbCat?"on":""}" data-cat="${esc(c)}">${c==="all"?"全部":(CAT_LABELS[c]||c)}</div>`).join("");
-  el.querySelectorAll(".chip").forEach(ch => ch.addEventListener("click", () => { kbCat = ch.dataset.cat; renderKbCats(); renderKb(); }));
+  el.innerHTML = all.map(c => `<option value="${esc(c)}">${c==="all"?"全部":(CAT_LABELS[c]||c)}</option>`).join("");
+  el.value = kbCat;
+  el.onchange = () => { kbCat = el.value; renderKbBooks(); renderKb(); };
+}
+function renderKbBooks(){
+  const kb = DATA.kb || [];
+  const pool = (kbCat === "all") ? kb : kb.filter(x => x.category === kbCat);
+  const counts = {};
+  pool.forEach(x => { if (x.book) counts[x.book] = (counts[x.book] || 0) + 1; });
+  const books = Object.keys(counts).sort((a,b) => counts[b] - counts[a]);
+  if (kbBook && !books.includes(kbBook)) kbBook = ""; // 选中书不在当前分类则重置
+  const el = document.getElementById("kb-books");
+  const all = ["", ...books];
+  el.innerHTML = all.map(b => `<option value="${esc(b)}">${b===""?"全部书籍":(esc(b)+" ("+(counts[b]||0)+")")}</option>`).join("");
+  el.value = kbBook;
+  el.onchange = () => { kbBook = el.value; renderKb(); };
 }
 function kbMatches(item){
   const q = kbQ.trim().toLowerCase();
@@ -289,7 +334,7 @@ function kbMatches(item){
   return hay.includes(q);
 }
 function renderKb(){
-  const list = (DATA.kb||[]).filter(x => (kbCat==="all"||x.category===kbCat) && kbMatches(x));
+  const list = (DATA.kb||[]).filter(x => (kbCat==="all"||x.category===kbCat) && (kbBook===""||x.book===kbBook) && kbMatches(x));
   const el = document.getElementById("kb-list");
   if (!list.length){ el.innerHTML = `<div class="empty">没有匹配的知识库条目</div>`; return; }
   list.sort((a,b) => (b.createdAt||"").localeCompare(a.createdAt||""));
@@ -397,7 +442,7 @@ function bindTabs(){
     document.getElementById("panel-" + t.dataset.tab).classList.add("on");
   }));
 }
-function renderAll(){ renderKbCats(); renderKb(); renderStats(); }
+function renderAll(){ renderKbCats(); renderKbBooks(); renderKb(); renderStats(); }
 
 async function reload(){
   DATA = await loadData();
