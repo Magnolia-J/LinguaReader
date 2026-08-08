@@ -8,6 +8,7 @@ let currentChapter = 0;
 let currentAnalysis = null;     // 当前 AI 分析结果
 let currentSource = null;       // 来源信息 {book, author, page}
 let selectedTags = [];          // 当前待收藏标签
+let lastSelectedTag = null;     // 用户最后一次主动点选的标签（决定入库主分类）
 let libSearch = "";             // 书库搜索关键字
 let libCategory = "all";        // 书库当前分类（"all" 表示全部）
 let DELETED_BOOK_IDS = new Set(); // 已删除书籍清单（tombstone）：服务端返回，渲染/合并都须跳过
@@ -1244,6 +1245,7 @@ function renderAIPanel() {
 
   // 智能标签
   selectedTags = (currentAnalysis.tags || []).slice();
+  lastSelectedTag = null;   // 每次打开 AI 面板时重置：默认以 AI 识别的分类为准
   html += renderTagRow();
   html += `<div class="ai-actions">
       <button class="btn btn-primary" id="save-analysis">收藏到知识库</button>
@@ -1279,7 +1281,7 @@ function renderTagRow() {
       el.addEventListener("click", () => {
         const t = el.dataset.tag;
         if (selectedTags.includes(t)) { selectedTags = selectedTags.filter(x => x !== t); el.classList.remove("on"); }
-        else { selectedTags.push(t); el.classList.add("on"); }
+        else { selectedTags.push(t); el.classList.add("on"); lastSelectedTag = t; }
       });
     });
   }, 0);
@@ -1290,9 +1292,25 @@ function saveCurrentAnalysis() {
   if (!currentAnalysis) return;
   const records = (currentAnalysis.records && currentAnalysis.records.length) ? currentAnalysis.records : [currentAnalysis.record];
   let saved = 0;
+  let finalCategory = "";
   records.forEach(r => {
     if (!r) return;
-    const entry = saveFromAnalysis(r, currentSource, selectedTags);
+    // 入库主分类判定（优先级从高到低）：
+    //   1) 用户最后一次「主动点选」且当前仍选中的、可映射为分类的标签（最新意图）
+    //   2) 否则：当前已选标签中可映射为分类的标签（含 AI 已预勾选的，取最后一个）
+    //   3) 以上都无 → 沿用 AI 自动识别的分类 r.category
+    // 这样无论用户主动点选，还是 AI 已预勾选「地道表达 / Native Expression」，
+    // 只要该标签处于选中状态，入库主分类就会随之变为对应分类，而非仅作小字标签。
+    let category = r.category;
+    const mapped = selectedTags.filter(t => TAG_TO_CATEGORY[t]);
+    if (lastSelectedTag && TAG_TO_CATEGORY[lastSelectedTag] && selectedTags.includes(lastSelectedTag)) {
+      category = TAG_TO_CATEGORY[lastSelectedTag];
+    } else if (mapped.length) {
+      category = TAG_TO_CATEGORY[mapped[mapped.length - 1]];
+    }
+    const record = Object.assign({}, r, { category });
+    const entry = saveFromAnalysis(record, currentSource, selectedTags);
+    finalCategory = category;
     saved++;
   });
   renderKB(getKbFilter());
@@ -1301,7 +1319,7 @@ function saveCurrentAnalysis() {
     btn.textContent = saved > 1 ? ("✓ 已收藏 " + saved + " 条") : "✓ 已收藏";
     btn.disabled = true; btn.classList.add("btn");
   }
-  const catName = (currentAnalysis.record && CATEGORY_LABEL[currentAnalysis.record.category]) || "";
+  const catName = CATEGORY_LABEL[finalCategory] || finalCategory || "";
   flash("已收藏到「" + catName + "」" + (saved > 1 ? "（" + saved + " 个片段）" : ""));
 }
 
