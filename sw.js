@@ -19,6 +19,7 @@ const CORE = [
   "/js/knowledgebase.js",
   "/js/upload.js",
   "/js/stats.js",
+  "/js/backup.js",
   "/icon.svg",
   "/manifest.json"
 ];

@@ -114,6 +114,34 @@ async function init() {
 
   setupMobileTabs();
   registerServiceWorker();
+
+  /* 阅读仪式组件（欢迎弹窗 / 读完纪念）：独立组件，本地优先，不破坏现有功能 */
+  if (window.ReadingRitual) {
+    window.ReadingRitual.init({
+      // 优先从用户已导入的书库取书；完成时长直接复用系统 READING.seconds（liveSeconds 含未结算秒）
+      getBooks: () => BOOKS.slice(),
+      getReadingSeconds: (id) => (typeof liveSeconds === "function" ? liveSeconds(id) : (READING.seconds[id] || 0)),
+      onContinue: () => {
+        // 「继续阅读其他书」：聚焦书库搜索，移动端切到书库标签
+        const lib = document.getElementById("lib-search");
+        if (lib) { lib.focus(); lib.scrollIntoView({ block: "center", behavior: "smooth" }); }
+        const btns = document.querySelectorAll("#bottom-tabs .tab-btn");
+        if (btns.length && document.getElementById("bottom-tabs").style.display !== "none") {
+          document.body.setAttribute("data-tab", "library");
+          btns.forEach(b => b.classList.toggle("active", b.dataset.tab === "library"));
+        }
+      }
+    });
+    if (currentBookId) window.ReadingRitual.setContext(currentBookCtx());
+    window.ReadingRitual.showWelcomeOnce();
+  }
+  applyReaderPrefs(); // 应用上次保存的字号 / 行距 / 护眼偏好
+}
+
+/* 当前书/章上下文，供阅读仪式组件判定「是否读到最后一章」 */
+function currentBookCtx() {
+  const b = BOOKS.find(x => x.id === currentBookId);
+  return { bookId: currentBookId, chapterIndex: currentChapter, chapterCount: b ? b.chapters.length : 0 };
 }
 
 /* 云端数据写回本地后，从后端重新拉取并渲染（不重置当前阅读与计时器） */
@@ -369,15 +397,18 @@ function renderBookList() {
 
   const cats = getCategories();
   el.innerHTML = filtered.map(b => {
-    const prog = Math.round(((BOOK_PROGRESS[b.id] || 0) + 1) / b.chapters.length * 100);
-    const secs = READING.seconds[b.id] || 0;
-    const opts = cats.map(c => `<option value="${escHtml(c)}" ${c === bookCategory(b) ? "selected" : ""}>${escHtml(c)}</option>`).join("");
+    const pr = BOOK_PROGRESS[b.id];
+    const ch = (pr && typeof pr === "object") ? (pr.c || 0) : (pr || 0);
+    const prog = Math.round((ch + 1) / b.chapters.length * 100);
+  const secs = READING.seconds[b.id] || 0;
+  const opts = cats.map(c => `<option value="${escHtml(c)}" ${c === bookCategory(b) ? "selected" : ""}>${escHtml(c)}</option>`).join("");
     return `<div class="book-card ${b.id === currentBookId ? "active" : ""}" data-id="${b.id}">
       <button class="bc-remove" data-id="${b.id}" title="从书架移除" aria-label="移除">✕</button>
       <div class="bc-title">${b.title}</div>
       <div class="bc-author">${b.author}</div>
       <div class="bc-meta-row">
         <span class="bc-lang">${b.language === "fr" ? "Français" : "English"}</span>
+        <span class="bc-format">${b.format === "pdf" ? "PDF" : (b.format ? String(b.format).toUpperCase() : "TXT")}</span>
         <span class="bc-time" data-bid="${b.id}">⏱ ${fmtDur(secs)}</span>
       </div>
       <select class="bc-cat-select" data-id="${b.id}" title="修改分类">${opts}</select>
@@ -405,6 +436,7 @@ function removeBookFromShelf(id) {
     flushReading();
     currentBookId = null;
     currentChapter = 0;
+    if (window.ReadingRitual) window.ReadingRitual.clearContext(); // 当前书已移除，清空仪式组件上下文
     const area = document.getElementById("reading-area");
     if (area) area.innerHTML = `<div class="backend-error" style="border:none;padding:34px 12px"><p>请选择一本书开始阅读。</p></div>`;
     const bt = document.getElementById("book-title");
@@ -577,18 +609,50 @@ function flushReading() {
     .catch(() => false);
 }
 
-/* 保存当前书籍的具体阅读位置（章节 + 阅读区滚动位置），供「打开即续读」 */
+/* 计算当前阅读锚点：视口顶部所在段落索引 + 文本指纹（前 40 字），用于「上次读到这里」标记与兜底定位 */
+function computeReadingAnchor(area) {
+  const paras = Array.prototype.slice.call(area.querySelectorAll("p"));
+  const top = area.scrollTop + 6;
+  let pid = 0;
+  for (let i = 0; i < paras.length; i++) {
+    const o = paras[i].offsetTop;
+    const b = o + paras[i].offsetHeight;
+    if (b >= top) { pid = i; break; }
+    pid = i;
+  }
+  const para = paras[pid];
+  const fp = para ? para.textContent.slice(0, 40) : "";
+  return { pid, fp };
+}
+
+/* 保存当前书籍的具体阅读位置（章节 + 滚动 + 段落索引 + 文本指纹），供「打开即续读」与「上次读到这里」标记 */
 function saveReadingPosition() {
-  if (!currentBookId) return;
+  if (!currentBookId || _restoring) return; // 恢复阅读位置期间不保存，避免误覆盖进度
   const area = document.getElementById("reading-area");
   const scroll = area ? Math.max(0, Math.round(area.scrollTop)) : 0;
-  const prog = BOOK_PROGRESS[currentBookId];
-  const c = (prog && typeof prog === "object") ? prog.c : (prog || 0);
-  BOOK_PROGRESS[currentBookId] = { c: c, s: scroll, u: Date.now() };
-  if (window.ApiClient) ApiClient.setProgress(currentBookId, c, scroll).catch(() => {});
+  const anchor = area ? computeReadingAnchor(area) : { pid: 0, fp: "" };
+  const page = currentChapter + 1; // 当前页码序号（PDF 第几页 / 章节序号+1），用于显示与记录
+  BOOK_PROGRESS[currentBookId] = {
+    c: currentChapter,
+    s: scroll,
+    u: Date.now(),
+    pid: anchor.pid,
+    fp: anchor.fp,
+    page: page
+  };
+  if (window.ApiClient) ApiClient.setProgress(currentBookId, currentChapter, scroll, { pid: anchor.pid, fp: anchor.fp, page: page }).catch(() => {});
 }
 let _scrollSaveTimer = null;
+let _restoring = false;          // 恢复阅读位置时锁定，避免恢复引起的滚动事件把进度误覆盖成更差位置
+let _markerAnchorScroll = 0;     // 标记锚点对应的滚动位置，用于判断用户是否已「继续阅读」从而淡出标记
 function onReadingScroll() {
+  if (window.ReadingRitual) window.ReadingRitual.onReadingScroll(); // 立即检测是否读到末尾（读完纪念）
+  // 用户继续阅读（滚动离开锚点）后，「上次读到这里」标记淡出；进度数据仍保留
+  const area = document.getElementById("reading-area");
+  const marker = document.getElementById("lastread-marker");
+  if (marker && area && Math.abs(area.scrollTop - _markerAnchorScroll) > 60) {
+    marker.classList.add("faded");
+  }
   if (_scrollSaveTimer) clearTimeout(_scrollSaveTimer);
   _scrollSaveTimer = setTimeout(saveReadingPosition, 800); // 防抖：停止滚动 0.8s 后保存
 }
@@ -701,6 +765,7 @@ function selectBook(id) {
   // 重置 AI 面板
   resetAIPanel();
   startReadingTimer();            // 开启本书阅读计时会话
+  if (window.ReadingRitual) window.ReadingRitual.setContext(currentBookCtx()); // 通知仪式组件当前书/章
   // 移动端：打开书后自动切到「阅读」标签，体验更顺
   if (document.getElementById("bottom-tabs") && getComputedStyle(document.getElementById("bottom-tabs")).display !== "none") {
     document.body.setAttribute("data-tab", "reading");
@@ -717,15 +782,71 @@ function renderChapterSelect(book) {
 function renderReadingArea(book, idx) {
   const chap = book.chapters[idx];
   const area = document.getElementById("reading-area");
-  let html = `<div class="chapter-head" style="font-weight:700;margin-bottom:10px">${chap.title}</div>`;
-  html += chap.paragraphs.map(p => `<p>${p}</p>`).join("");
-  html += `<div class="page-mark">${chap.pages}</div>`;
+  // 标题与段落做 HTML 转义：避免 PDF/TXT 中出现的 < > & 破坏渲染，
+  // 且浏览器解码后 p.textContent 仍等于原文，划线/批注的字符偏移因此保持准确。
+  let html = `<div class="chapter-head" style="font-weight:700;margin-bottom:10px">${escHtml(chap.title)}</div>`;
+  // 每段加 data-pidx，供划线/批注按字符偏移精确定位（PDF 与 TXT/EPUB 一视同仁）
+  html += chap.paragraphs.map((p, i) => `<p data-pidx="${i}">${escHtml(p)}</p>`).join("");
+  // 页码映射：PDF 显示「PDF 第 N 页 / 共 M 页」；其余格式沿用各章 pages 标签
+  const pageLabel = book.format === "pdf" && book.totalPages
+    ? `PDF 第 ${idx + 1} 页 / 共 ${book.totalPages} 页`
+    : (chap.pages || "");
+  html += `<div class="page-mark">${escHtml(pageLabel)}</div>`;
   area.innerHTML = html;
-  // 恢复到上次停止的具体位置（章节内的滚动位置），实现「打开即续读」
+  // 重新套回本书本章已有的划线/批注（按字符偏移重建 <mark>，与文本位置绑定）
+  if (window.BookMarks) window.BookMarks.render(book, idx);
+  // 恢复到上次停止的具体位置（章节内滚动位置），实现「打开即续读」。
+  // _restoring 锁定：避免恢复滚动触发的 scroll 事件把进度误覆盖成更差位置（例如退回章节开头）。
   const id = currentBookId;
   const prog = id && BOOK_PROGRESS[id];
-  const s = (prog && typeof prog === "object") ? prog.s : 0;
-  if (s) requestAnimationFrame(() => { area.scrollTop = s; });
+  _restoring = true;
+  let targetScroll = (prog && typeof prog === "object") ? (prog.s || 0) : 0;
+  // 兜底定位：scroll 缺失/失效但记录了段落索引，则滚动到该段落附近，而非退回章节开头
+  if (!targetScroll && prog && typeof prog === "object" && typeof prog.pid === "number") {
+    const ps = area.querySelectorAll("p");
+    if (prog.pid >= 0 && prog.pid < ps.length) targetScroll = Math.max(0, ps[prog.pid].offsetTop - 24);
+  }
+  if (targetScroll) requestAnimationFrame(() => { area.scrollTop = targetScroll; });
+  // 先恢复位置，再显示「上次读到这里」标记
+  requestAnimationFrame(() => { showLastReadMarker(area, prog); });
+  setTimeout(() => { _restoring = false; }, 400);
+}
+
+/* ---------- 「上次读到这里」阅读位置标记 ---------- */
+function removeLastReadMarker() {
+  const old = document.getElementById("lastread-marker");
+  if (old) old.remove();
+}
+/* 在保存的最后阅读段落处显示一个轻量系统标记；与用户划线/批注/笔记完全独立。
+ * 优先用段落索引 pid 定位；段落索引失效时用文本指纹 fp 就近匹配；最终兜底到本章开头附近。 */
+function showLastReadMarker(area, prog) {
+  removeLastReadMarker();
+  if (!prog || typeof prog !== "object") return; // 从未读过该书则不显示标记
+  const paras = Array.prototype.slice.call(area.querySelectorAll("p"));
+  if (!paras.length) return;
+  let target = null;
+  const pid = (typeof prog.pid === "number") ? prog.pid : -1;
+  if (pid >= 0 && pid < paras.length) target = paras[pid];
+  if (!target && typeof prog.fp === "string" && prog.fp) {
+    target = paras.filter(p => p.textContent.slice(0, 40) === prog.fp)[0] || null; // 指纹就近匹配
+  }
+  if (!target) target = paras[0]; // 最终兜底：标记到本章开头附近，而不是完全不显示
+  const marker = document.createElement("div");
+  marker.className = "lastread-marker";
+  marker.id = "lastread-marker";
+  const label = document.createElement("span");
+  label.className = "lastread-label";
+  label.textContent = "📖 上次读到这里";
+  marker.appendChild(label);
+  marker.style.top = target.offsetTop + "px";
+  area.appendChild(marker);
+  _markerAnchorScroll = area.scrollTop;
+  // 点击标记：返回上次阅读位置（标记重新亮起，进度数据不变）
+  label.addEventListener("click", () => {
+    area.scrollTo({ top: Math.max(0, target.offsetTop - 80), behavior: "smooth" });
+    marker.classList.remove("faded");
+    _markerAnchorScroll = area.scrollTop;
+  });
 }
 
 /* ---------- 章节导航 ---------- */
@@ -736,6 +857,7 @@ function gotoChapter(delta) {
   i = Math.max(0, Math.min(book.chapters.length - 1, i));
   currentChapter = i;
   BOOK_PROGRESS[book.id] = { c: i, s: 0 }; // 切换章节：重置本章滚动位置为顶部
+  if (window.ReadingRitual) window.ReadingRitual.setContext(currentBookCtx()); // 章节变化通知仪式组件
   if (window.ApiClient) ApiClient.setProgress(book.id, i, 0).catch(() => {});
   renderChapterSelect(book);
   renderReadingArea(book, i);
@@ -785,6 +907,7 @@ function bindEvents() {
     currentChapter = +e.target.value;
     const book = BOOKS.find(b => b.id === currentBookId);
     BOOK_PROGRESS[book.id] = { c: currentChapter, s: 0 }; // 手动切章：本章从顶部开始
+    if (window.ReadingRitual) window.ReadingRitual.setContext(currentBookCtx());
     if (window.ApiClient) ApiClient.setProgress(book.id, currentChapter, 0).catch(() => {});
     renderReadingArea(book, currentChapter);
   });
@@ -793,6 +916,20 @@ function bindEvents() {
   area.addEventListener("mouseup", onSelection);
   // 阅读区滚动：防抖保存具体阅读位置（章节内位置），实现「打开即续读」
   area.addEventListener("scroll", onReadingScroll, { passive: true });
+  // 阅读舒适度控件：字号 / 行距 / 护眼（偏好本地保存，刷新后保持）
+  const rtDec = document.getElementById("rt-font-dec");
+  if (rtDec) rtDec.addEventListener("click", () => { const p = getReaderPrefs(); p.fs = Math.max(13, (parseInt(p.fs, 10) || 17) - 1); saveReaderPrefs(p); applyReaderPrefs(); });
+  const rtInc = document.getElementById("rt-font-inc");
+  if (rtInc) rtInc.addEventListener("click", () => { const p = getReaderPrefs(); p.fs = Math.min(30, (parseInt(p.fs, 10) || 17) + 1); saveReaderPrefs(p); applyReaderPrefs(); });
+  const rtLh = document.getElementById("rt-lh");
+  if (rtLh) rtLh.addEventListener("click", () => {
+    const p = getReaderPrefs();
+    const cur = p.lh || "1.7";
+    p.lh = (cur === "1.7") ? "2.0" : (cur === "2.0" ? "1.4" : "1.7");
+    saveReaderPrefs(p); applyReaderPrefs();
+  });
+  const rtEye = document.getElementById("rt-eye");
+  if (rtEye) rtEye.addEventListener("click", () => { const p = getReaderPrefs(); p.eye = !p.eye; saveReaderPrefs(p); applyReaderPrefs(); });
   // 移动端长按选词不会触发 mouseup，用 selectionchange 兜底（桌面也会被它覆盖，幂等）
   document.addEventListener("selectionchange", onSelectionChange);
   // 屏蔽阅读区原生长按菜单（仅当有选区时，让自研弹条成为操作入口；无选区保留系统菜单便于复制）
@@ -802,15 +939,44 @@ function bindEvents() {
       hidePopup();
   });
   // 浮动工具条
-  document.getElementById("selection-popup").addEventListener("click", e => {
+  const popupEl = document.getElementById("selection-popup");
+  // 关键：按钮 mousedown 时阻止默认，避免点击「高亮」前文本选区被清掉（否则拿不到字符偏移）
+  popupEl.addEventListener("mousedown", e => { if (e.target.closest(".sp-btn")) e.preventDefault(); });
+  popupEl.addEventListener("click", e => {
     const btn = e.target.closest(".sp-btn");
     if (!btn) return;
     const text = currentSelectionText;
-    if (btn.dataset.action === "analyze") doAnalyze(text);
-    else if (btn.dataset.action === "annotate") openAnnotation(text);
-    else doQuickSave(text);
+    const act = btn.dataset.action;
+    const book = BOOKS.find(b => b.id === currentBookId);
+    if (act === "analyze") doAnalyze(text);
+    else if (act === "annotate") openAnnotation(text);
+    else if (act === "highlight") {
+      // 高亮 Toggle：选中未高亮文字 → 添加；完整选中同一高亮 → 取消。
+      // 基于「章节+段落+字符偏移」位置判定（不依赖文字内容），避免误删/误改部分高亮。
+      if (book && window.BookMarks) {
+        const offs = (currentSelectionOffsets && currentSelectionOffsets.length)
+          ? currentSelectionOffsets
+          : window.BookMarks.captureSelection(currentChapter);
+        if (offs && offs.length) {
+          const res = window.BookMarks.toggleSelection(book, currentChapter, offs);
+          if (res.action === "remove") {
+            flash("已取消高亮 " + res.removed.length + " 处");
+            window.BookMarks.showUndoToast(res.removed.length, () => { window.BookMarks.undo(); flash("已撤销：恢复高亮"); });
+          } else if (res.action === "add") {
+            flash("已高亮 " + res.created.length + " 处");
+            window.BookMarks.showUndoToast(res.created.length, () => { window.BookMarks.undo(); flash("已撤销：取消高亮"); });
+          } else if (res.action === "toggle") {
+            flash("已切换高亮");
+          } else {
+            doQuickSave(text); // none：兜底收藏
+          }
+        } else doQuickSave(text);
+      } else doQuickSave(text);
+    } else doQuickSave(text); // 「直接收藏」：加入知识库
     hidePopup();
   });
+  // 划线/批注组件初始化（事件委托已内置，这里只需挂一次）
+  if (window.BookMarks) window.BookMarks.init();
   // 知识库筛选：分类 + 书籍，两个下拉组合生效
   const kbFilterEl = document.getElementById("kb-filter");
   const kbBookFilterEl = document.getElementById("kb-book-filter");
@@ -1035,6 +1201,7 @@ function buildDictPrefs() {
 }
 
 let currentSelectionText = "";
+let currentSelectionOffsets = [];   // 选区出现时即捕获「章节+段落+字符偏移」，供划线/批注使用（避免点击按钮后选区被收起导致拿不到偏移）
 
 /* 选区锚点是否落在阅读区内（anchorNode 可能是文本节点或元素节点） */
 function selectionInReadingArea(sel) {
@@ -1049,6 +1216,8 @@ function showSelectionPopup(sel) {
   const rect = sel.getRangeAt(0).getBoundingClientRect();
   if (!rect || (rect.width === 0 && rect.height === 0)) return;
   currentSelectionText = sel.toString().trim();
+  // 选区出现瞬间即捕获文本位置（最可靠的时刻，按钮点击前不会丢失），供划线/批注绑定
+  currentSelectionOffsets = (window.BookMarks && !window.BookMarks._disabled) ? window.BookMarks.captureSelection(currentChapter) : [];
   const popup = document.getElementById("selection-popup");
   popup.classList.remove("hidden"); // 先显示才能取到 offset 尺寸
   const pw = popup.offsetWidth || 210, ph = popup.offsetHeight || 40;
@@ -1116,6 +1285,22 @@ function buildContextWindow() {
   } catch (e) { return null; }
 }
 
+/* ---------- 本地 AI 分析缓存（避免重复调用 API / 重复 AI 响应） ----------
+ * 同样的「语言 + 句子」只调用一次 LLM，之后直接从本地持久缓存读取。
+ * 缓存存于 localStorage（持久、离线可用，非浏览器临时缓存），不写入 Supabase。 */
+const ANALYSIS_CACHE_KEY = "lr_analysis_cache_v1";
+const ANALYSIS_CACHE_MAX = 300;
+function getAnalysisCache() {
+  try { return JSON.parse(localStorage.getItem(ANALYSIS_CACHE_KEY) || "{}"); } catch (e) { return {}; }
+}
+function setAnalysisCache(obj) {
+  try { localStorage.setItem(ANALYSIS_CACHE_KEY, JSON.stringify(obj)); } catch (e) { /* 容量满忽略 */ }
+}
+function analysisCacheKey(language, text) {
+  const n = (typeof LRStorage !== "undefined" && LRStorage.norm) ? LRStorage.norm(text) : String(text).toLowerCase().replace(/\s+/g, " ").trim();
+  return (language || "") + "::" + n;
+}
+
 async function doAnalyze(presetText) {
   const book = BOOKS.find(b => b.id === currentBookId);
   if (!book) return;
@@ -1136,6 +1321,20 @@ async function doAnalyze(presetText) {
 
   // 语境参考窗口：仅当前句 ±2~3 句，明确「非分析对象」，绝不发送给 AI 当作输入
   const context = buildContextWindow();
+
+  // —— 本地分析缓存：相同「语言 + 句子」直接命中，跳过 API 调用 ——
+  const cacheKey = analysisCacheKey(book.language, text);
+  try {
+    const cache = getAnalysisCache();
+    const hit = cache[cacheKey];
+    if (hit && (hit.record || hit.blocks || hit.segments)) {
+      currentAnalysis = hit;
+      renderAIPanel();
+      flash("✓ 命中本地分析缓存（未重复调用 AI）");
+      return;
+    }
+  } catch (e) { /* 缓存读取失败不影响主流程 */ }
+
   flash("正在请求 AI 分析…");
 
   let result;
@@ -1147,6 +1346,15 @@ async function doAnalyze(presetText) {
     flash("AI 分析失败：" + e.message);
     return;
   }
+
+  // 缓存成功结果（本地持久，避免下一次重复调用 API / 重复 AI 响应）
+  try {
+    const cache = getAnalysisCache();
+    cache[cacheKey] = result;
+    const keys = Object.keys(cache);
+    if (keys.length > ANALYSIS_CACHE_MAX) delete cache[keys[0]];
+    setAnalysisCache(cache);
+  } catch (e) { /* 忽略缓存写入失败 */ }
 
   /* —— 完整性校验（兜底）：若最终返回明显未覆盖用户选区，提示而非静默展示 —— */
   if (typeof StrictSelect !== "undefined" && !StrictSelect.isSelectionCovered(text, result)) {
@@ -1389,6 +1597,9 @@ function closeModal() { document.getElementById("export-modal").classList.add("h
 let currentAnnoId = null;
 let currentAnnoQuote = "";
 let currentAnnoSource = null;
+let currentAnnoOffsets = [];      // 本次批注绑定的「章节+段落+字符偏移」列表（来自选区）
+let currentAnnoEditMarkId = null; // 正在编辑的已有 mark（点击已有划线弹出的「改批注」）
+let currentAnnoExistingKbId = null; // 编辑时已有的知识库条目 id
 
 function openAnnotation(text) {
   const book = BOOKS.find(b => b.id === currentBookId);
@@ -1397,6 +1608,13 @@ function openAnnotation(text) {
   currentAnnoSource = { book: book.title, author: book.author, page: chap.pages };
   currentAnnoQuote = text;
   currentAnnoId = null;
+  currentAnnoEditMarkId = null;
+  currentAnnoExistingKbId = null;
+  // 捕获选区对应的文本位置（章节+段落+字符偏移），用于把批注精确绑定到原文
+  // 优先用选区出现时已捕获的偏移（更稳健），兜底再实时取一次
+  currentAnnoOffsets = (currentSelectionOffsets && currentSelectionOffsets.length)
+    ? currentSelectionOffsets
+    : ((window.BookMarks) ? window.BookMarks.captureSelection(currentChapter) : []);
   const q = document.getElementById("anno-quote");
   q.textContent = "「" + (text.length > 200 ? text.slice(0, 200) + "…" : text) + "」";
   document.getElementById("anno-note").value = "";
@@ -1407,6 +1625,32 @@ function openAnnotation(text) {
   showAnnoStep(1);
   document.getElementById("annotation-modal").classList.remove("hidden");
 }
+
+/* 点击已有划线/批注弹出的「批注 / 改批注」→ 预填内容并复用其文本位置（mark） */
+function openAnnotationForMark(mark, isEdit) {
+  const book = BOOKS.find(b => b.id === currentBookId);
+  if (!book || !mark) return;
+  const chap = book.chapters[mark.chapterIdx] || book.chapters[currentChapter];
+  currentAnnoSource = { book: book.title, author: book.author, page: (chap && chap.pages) || "" };
+  currentAnnoQuote = mark.text || "";
+  currentAnnoEditMarkId = mark.id;
+  currentAnnoExistingKbId = mark.kbId || null;
+  currentAnnoId = mark.kbId || null;
+  currentAnnoOffsets = [{ chapterIdx: mark.chapterIdx, paraIdx: mark.paraIdx, startOff: mark.startOff, endOff: mark.endOff, text: mark.text }];
+  const q = document.getElementById("anno-quote");
+  q.textContent = "「" + (currentAnnoQuote.length > 200 ? currentAnnoQuote.slice(0, 200) + "…" : currentAnnoQuote) + "」";
+  document.getElementById("anno-note").value = mark.note || "";
+  renderAnnoTypes();
+  if (mark.annotationType) {
+    const rb = document.querySelector('input[name="anno-type"][value="' + (window.CSS && CSS.escape ? CSS.escape(mark.annotationType) : mark.annotationType) + '"]');
+    if (rb) rb.checked = true;
+  }
+  const exp = document.getElementById("anno-exportable");
+  if (exp) exp.checked = (typeof mark.exportable === "boolean") ? mark.exportable : true;
+  showAnnoStep(1);
+  document.getElementById("annotation-modal").classList.remove("hidden");
+}
+window.openAnnotationForMark = openAnnotationForMark;
 function showAnnoStep(n) {
   document.getElementById("anno-step-text").classList.toggle("hidden", n !== 1);
   document.getElementById("anno-step-type").classList.toggle("hidden", n !== 2);
@@ -1415,18 +1659,29 @@ function closeAnnotation() { document.getElementById("annotation-modal").classLi
 function annoNext() {
   const note = document.getElementById("anno-note").value.trim();
   if (!note) { flash("请先写下批注内容"); return; }
-  const entry = addEntry({
-    category: "annotation",
-    tags: [],
-    fields: { quote: currentAnnoQuote, note, annotationType: "其他" },
-    book: currentAnnoSource.book, author: currentAnnoSource.author, page: currentAnnoSource.page,
-    exportable: true
-  });
-  currentAnnoId = entry.id;
+  const fields = { quote: currentAnnoQuote, note, annotationType: "其他" };
+  if (currentAnnoExistingKbId) {
+    // 编辑已有批注条目：更新其字段，不新建
+    updateKb(currentAnnoExistingKbId, {
+      fields: Object.assign({}, fields),
+      book: currentAnnoSource.book, author: currentAnnoSource.author, page: currentAnnoSource.page
+    });
+    currentAnnoId = currentAnnoExistingKbId;
+  } else {
+    const entry = addEntry({
+      category: "annotation",
+      tags: [],
+      fields: fields,
+      book: currentAnnoSource.book, author: currentAnnoSource.author, page: currentAnnoSource.page,
+      exportable: true
+    });
+    currentAnnoId = entry.id;
+  }
   showAnnoStep(2); // 写完后自动跳出选择分类
 }
 function annoFinish() {
   if (!currentAnnoId) return;
+  const note = (document.getElementById("anno-note").value || "").trim();
   const typeEl = document.querySelector('input[name="anno-type"]:checked');
   const type = typeEl ? typeEl.value : "其他";
   const exp = document.getElementById("anno-exportable").checked;
@@ -1434,6 +1689,15 @@ function annoFinish() {
   if (!e) return;
   // 合并 fields（不覆盖 quote/note），并同步后端
   updateKb(currentAnnoId, { fields: Object.assign({}, e.fields, { annotationType: type }), exportable: exp });
+  // 把批注绑定到原文位置：升级/新建对应 mark（章节+段落+字符偏移），并写入 kbId/note/分类/导出开关
+  const book = BOOKS.find(b => b.id === currentBookId);
+  if (book && window.BookMarks) {
+    if (currentAnnoEditMarkId) {
+      window.BookMarks.setMarkAnnotation(book, currentAnnoEditMarkId, currentAnnoId, note, type, exp);
+    } else if (currentAnnoOffsets && currentAnnoOffsets.length) {
+      window.BookMarks.upsertFromOffsets(book, currentAnnoOffsets, { kbId: currentAnnoId, note: note, annotationType: type, exportable: exp });
+    }
+  }
   closeAnnotation();
   const filterEl = document.getElementById("kb-filter");
   if (filterEl) filterEl.value = "annotation";
@@ -1509,6 +1773,25 @@ function flash(msg) {
   const old = s.textContent;
   s.textContent = msg; s.style.color = "#00a884";
   setTimeout(() => { s.textContent = old; s.style.color = ""; }, 1800);
+}
+
+/* ---------- 阅读舒适度偏好（字号 / 行距 / 护眼），本地保存 ---------- */
+function getReaderPrefs() {
+  try { return JSON.parse(localStorage.getItem("lr_reader_prefs") || "{}"); } catch (e) { return {}; }
+}
+function saveReaderPrefs(p) {
+  try { localStorage.setItem("lr_reader_prefs", JSON.stringify(p)); } catch (e) {}
+}
+function applyReaderPrefs() {
+  const p = getReaderPrefs();
+  if (p.fs) document.documentElement.style.setProperty("--lr-fs", parseInt(p.fs, 10) + "px");
+  if (p.lh) document.documentElement.style.setProperty("--lr-lh", p.lh);
+  document.body.classList.toggle("eye-care", !!p.eye);
+  const eye = document.getElementById("rt-eye");
+  if (eye) eye.classList.toggle("active", !!p.eye);
+  const lh = document.getElementById("rt-lh");
+  if (lh) lh.textContent = (p.lh === "2.0") ? "行距·宽" : (p.lh === "1.4") ? "行距·窄" : "行距·标准";
+  return p;
 }
 
 /* ---------- 移动端：底部标签栏导航 ---------- */

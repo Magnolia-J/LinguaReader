@@ -1,13 +1,21 @@
 {
   "name": "linguareader-workspace",
-  "version": "1.1.0",
-  "description": "LinguaReader Workspace — 外语原版书精读与知识库工作台（含后端持久化与 LLM 智能批注）",
-  "main": "server.js",
+  "version": "1.2.0",
+  "description": "LinguaReader Workspace — 外语原版书精读与知识库工作台（含后端持久化、LLM 智能批注、本地自动备份；可打包为独立桌面应用）",
+  "main": "electron/main.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "node server.js",
+    "electron": "electron .",
+    "dist": "electron-builder --win --dir",
+    "dist:portable": "electron-builder --win portable"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
   },
   "engines": {
     "node": ">=18"

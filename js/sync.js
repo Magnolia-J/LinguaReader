@@ -67,8 +67,17 @@
     // 否则「本地删除 + 云端仍保留」会在并集合并时把书复活。
     const del = new Set([...(local.deletedBookIds || []), ...(remote.deletedBookIds || [])].map(String));
     const filt = (arr) => (arr || []).filter((b) => b && b.id && !del.has(String(b.id)));
+
+    // 书籍合并：云端只持有「轻量元数据」（不含完整 chapters），因此以本地章节为准，
+    // 仅用云端元数据覆盖；云端独有（本机无内容）的书不拉取，避免不可读的幽灵书。
+    // 这样 Supabase 永远不存完整书文本，数据库增长被锁在「元数据量级」。
+    const LB = (typeof window !== "undefined" && window.LRStorage) || null;
+    const books = LB
+      ? LB.mergeBooksLocalFirst(local.books, remote.books)
+      : filt(mergeById(local.books, remote.books));
+
     return {
-      books: filt(mergeById(local.books, remote.books)),
+      books: filt(books),
       progress: Object.assign({}, remote.progress, local.progress),
       kb: mergeById(local.kb, remote.kb),
       prefs: remote.prefs || local.prefs,
@@ -112,7 +121,12 @@
         return true; // 视为本次同步无操作，不覆盖本地好书
       }
 
-      await client.from("kb_store").upsert({ user_id: _uid, payload: merged, updated_at: new Date().toISOString() });
+      // 云端只同步「轻量数据」：剥离每本书的完整正文（chapters）等重字段，
+      // 完整书籍内容始终留在本地（data/books + store.json）。这样 Supabase 数据库
+      // 只会随「书籍数量（元数据）/ 笔记 / 进度」线性增长，而非随书籍体积爆炸。
+      const LB = (typeof window !== "undefined" && window.LRStorage) || null;
+      const cloudPayload = LB ? LB.minimizeForCloud(merged) : merged;
+      await client.from("kb_store").upsert({ user_id: _uid, payload: cloudPayload, updated_at: new Date().toISOString() });
 
       const localCount = (local.kb || []).length + (local.books || []).length;
       const mergedCount = (merged.kb || []).length + (merged.books || []).length;

@@ -20,6 +20,15 @@ function loadEnv() {
       const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
       if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
     });
+    // 兼容别名：用户可用更通用的变量名，效果与 LLM_* 一致
+    const aliases = {
+      LLM_API_KEY: "OPENAI_API_KEY",
+      LLM_API_BASE: "API_BASE_URL",
+      LLM_MODEL: "MODEL_NAME",
+    };
+    for (const [canon, alias] of Object.entries(aliases)) {
+      if (!process.env[canon] && process.env[alias]) process.env[canon] = process.env[alias];
+    }
   } catch (e) { /* ignore */ }
 }
 
@@ -51,6 +60,11 @@ async function callLLM(messages) {
     throw new Error("LLM HTTP " + resp.status + ": " + t.slice(0, 200));
   }
   const j = await resp.json();
+  // 观测 DeepSeek 前缀缓存命中情况，便于验证 prompt cache 优化是否生效
+  if (j && j.usage) {
+    const hit = j.usage.prompt_cache_hit_tokens;
+    if (typeof hit === "number") console.log("[llm] prompt_cache_hit_tokens=" + hit + " / prompt_tokens=" + (j.usage.prompt_tokens != null ? j.usage.prompt_tokens : "?"));
+  }
   return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
 }
 
@@ -89,6 +103,12 @@ const COMMON_ROLE = `你是 LinguaReader Workspace 的 AI 核心助手，帮助�
 3. 保留原文出处信息。
 4. 所有输出必须是结构化、可用于数据库存储的 JSON。
 5. 法文词汇的词典释义（defs）必须用目标语言法语给出（法法词典），并尽量同时引用 Le Robert、Larousse、CNRTL 三家释义；英文则用目标语言英文，优先 Oxford / Cambridge。语境义（context）可用中文说明。
+6. 【上下文优先】所有分析必须优先结合用户提供的「完整句子」做语境判断，禁止仅依据单词本身或词典默认释义。若单词存在多词性（名词 / 动词 / 形容词等），必须先结合句法结构判断当前真实词性，再做解释（词性消歧 WSD）。
+7. 【动词必须给原型】若识别为动词变位，必须在输出中包含原型（lemma）、时态 / 语式 / 人称，以及该句中的实际含义。知识库与导出内容统一保存原型动词，不要保存变位形式。
+8. 释义必须以当前语境为准，只输出最符合本句的含义；如存在歧义，可简要说明为何选择该词性。
+9. 【严格按选区分析】用户选中了什么，你就完整分析什么。绝不允许自动截断、扩展、缩减或重新划分用户选区；无论是单词、短语、完整句子、长复合句、多个句子还是跨行文本，都必须作为完整输入处理。若输入较长，系统会自动分段后合并，你只需完整分析「当前这一段」，不要遗漏其中任何部分。系统可能额外提供「语境参考」字段，它仅供你理解/词性消歧，**绝不是你的分析对象**，严禁对语境参考做任何分析或把它纳入输出。
+10. 若你返回的内容未覆盖用户选区的全部要点，系统会自动要求你重新分析；请务必一次性完整覆盖，不要省略。
+始终遵循：上下文 → 词性判断 → 原型识别 → 释义输出。
 只输出 JSON，不要任何解释、前言或代码围栏。`;
 
 function langName(l) { return l === "fr" ? "法语" : "英语"; }
@@ -107,26 +127,36 @@ function defsSchema(language) {
   return `[ { "dict": "Oxford Dictionary", "text": "权威目标语言释义" } ]`;
 }
 
-function buildAnalyzeMessages(text, type, language) {
-  const lang = langName(language);
-  let schema = "";
-  let note = "";
+/* ---------- 固定任务模板（按 type 固定；语言相关部分按 (type,language) 记忆化，
+   保证连续请求的 user 前缀一致 → 提升 DeepSeek prompt_cache_hit_tokens） ---------- */
+const ANALYZE_NOTES = {
+  word: "词汇模式：先结合语境做词性消歧（WSD），再输出权威词典释义（法文须同时引用 Le Robert、Larousse、CNRTL 三家法法词典，释义用法语）、原型 lemma、词性 pos、动词信息 verbInfo、语境义、语法作用、搭配、例句，并判断 learningValue（是否值得收藏）。动词变位必须给原型。",
+  phrase: "短语模式：针对用户选中的短语，给出短语整体含义、构成拆解、搭配与例句，并判断 learningValue（是否值得收藏）。",
+  expression: "表达检测：识别地道表达 / 习语 / 学术短语 / 文学表达，给出含义、用法、例句、相似表达。",
+  sentence: "句法分析：给出自然译文、句子结构、语法讲解、可迁移句型、写作用法。若句子极具文学性，可把 category 改为 beautifulSentences 并加标签 Beautiful Sentence / Literary Analysis。",
+  paragraph: "段落 / 文学分析：归纳主旨、修辞、情感效果与作者风格。"
+};
+
+function buildAnalyzeSchema(type, language) {
   if (type === "word" || type === "phrase") {
-    schema = `{
+    return `{
   "category": "vocabulary",
   "tags": ["Vocabulary"],
   "data": {
-    "word": "原词",
+    "word": "原词（用户选中的词形，可能是变位形式）",
+    "lemma": "原型：动词变位务必给不定式；名词给单数原形；形容词给阳性单数原形",
+    "pos": "词性：动词 / 名词 / 形容词 / 副词 / 介词 / 代词 / 连词 / 冠词 …",
+    "verbInfo": "若 pos 为动词：『时态 / 语式 / 人称 + 本句实际含义』；非动词填 null",
     "defs": ${defsSchema(language)},
-    "context": "当前语境含义（中文说明）",
+    "context": "当前语境含义（中文说明，必须贴合本句）",
+    "grammarRole": "该词在句中的语法作用（主语 / 宾语 / 表语 / 定语 / 状语 …）",
     "collocations": ["高频搭配1", "高频搭配2"],
     "examples": ["自然例句（含中文译文）"],
     "learningValue": true
   }
 }`;
-    note = "词汇模式：给出权威词典释义（法文须同时引用 Le Robert、Larousse、CNRTL 三家法法词典，释义用法语）、语境义、搭配、例句，并判断 learningValue（是否值得收藏）。";
   } else if (type === "expression") {
-    schema = `{
+    return `{
   "category": "expressions",
   "tags": ["Native Expression"],
   "data": {
@@ -137,9 +167,8 @@ function buildAnalyzeMessages(text, type, language) {
     "similar": ["相似表达1", "相似表达2"]
   }
 }`;
-    note = "表达检测：识别地道表达 / 习语 / 学术短语 / 文学表达，给出含义、用法、例句、相似表达。";
   } else if (type === "sentence") {
-    schema = `{
+    return `{
   "category": "sentencePatterns",
   "tags": ["Sentence Pattern"],
   "data": {
@@ -151,9 +180,8 @@ function buildAnalyzeMessages(text, type, language) {
     "writingUsage": "写作迁移建议，中文"
   }
 }`;
-    note = "句法分析：给出自然译文、句子结构、语法讲解、可迁移句型、写作用法。若句子极具文学性，可把 category 改为 beautifulSentences 并加标签 Beautiful Sentence / Literary Analysis。";
-  } else {
-    schema = `{
+  }
+  return `{
   "category": "writingMaterials",
   "tags": ["Writing Material"],
   "data": {
@@ -163,16 +191,44 @@ function buildAnalyzeMessages(text, type, language) {
     "authorStyle": "作者风格标记（中文）"
   }
 }`;
-    note = "段落 / 文学分析：归纳主旨、修辞、情感效果与作者风格。";
-  }
+}
 
+/* 按 (type,language) 记忆化任务模板：同一组合永远返回完全相同的字符串，
+   使连续请求的 prompt 前缀稳定，最大化 DeepSeek 前缀缓存命中。 */
+const _analyzeTaskCache = new Map();
+function getAnalyzeTask(type, language) {
+  const key = type + "|" + language;
+  if (_analyzeTaskCache.has(key)) return _analyzeTaskCache.get(key);
+  const note = ANALYZE_NOTES[type] || ANALYZE_NOTES.paragraph;
+  const schema = buildAnalyzeSchema(type, language);
+  const block = "本次任务：对一段" + langName(language) + "文本做「" + note + "」分析。\n请严格按如下 JSON Schema 输出：\n" + schema;
+  _analyzeTaskCache.set(key, block);
+  return block;
+}
+
+/* 构建分析消息：
+   - System 角色【完全固定】= COMMON_ROLE，绝不在前缀中拼接任何动态内容（语言/类型/schema/retry）。
+   - User 角色：固定任务模板 → 语境参考(仅当前句±2~3句) → 待分析选区(最后，最易变) → 重试说明(最末)。
+   这样连续请求拥有相同的 prompt 前缀，且最易变的选区文本位于末尾，最大化 prompt_cache_hit_tokens。 */
+function buildAnalyzeMessages(text, type, language, context, retry) {
+  const taskBlock = getAnalyzeTask(type, language); // 按 (type,language) 固定
+  const ctxPart = (context && String(context).trim())
+    ? ("\n\n—— 语境参考（仅用于词性消歧与理解，绝不是分析对象，请勿对其做分析）：——\n" + String(context).trim())
+    : "";
+  const retryPart = retry
+    ? "\n\n【重要重试】你上一次返回未完整覆盖用户选区的全部内容。请务必完整分析下面【待分析选区】提供的全部文本，逐词 / 逐句覆盖，不得省略、截断或仅解释其中一部分。"
+    : "";
+  const user = taskBlock + ctxPart + "\n\n—— 待分析选区（请完整分析下面全部内容，不得截断、扩展或重新划分）：——\n" + text + retryPart;
   return [
-    { role: "system", content: COMMON_ROLE + "\n\n本次任务：对一段" + lang + "文本做「" + note + "」分析。\n请严格按如下 JSON Schema 输出：\n" + schema },
-    { role: "user", content: "类型：" + type + "\n" + lang + "原文：\n" + text }
+    { role: "system", content: COMMON_ROLE },
+    { role: "user", content: user }
   ];
 }
 
-function buildAnnotateMessages(bookTitle, language, chapterTitle, text) {
+/* 按 language 记忆化批注任务模板（与单条分析同理，保证 system 固定 + user 前缀稳定） */
+const _annotateTaskCache = new Map();
+function getAnnotateTask(language) {
+  if (_annotateTaskCache.has(language)) return _annotateTaskCache.get(language);
   const lang = langName(language);
   const schema = `[
   {
@@ -191,27 +247,31 @@ function buildAnnotateMessages(bookTitle, language, chapterTitle, text) {
     "data": { "sentence":"原句", "translation":"译文", "structure":["主谓宾…"], "grammar":"讲解", "pattern":"可迁移句型", "writingUsage":"写法建议" }
   }
 ]`;
+  const block = "本次任务：从一段" + lang + "文学原文中提取「高价值、值得个人收藏」的知识条目，建立用户的语言知识库。" +
+    "条目类型尽量多样：若干词汇（vocabulary）、若干地道表达（expressions）、若干精彩/典范句子（sentencePatterns 或 beautifulSentences）。" +
+    "每条都要基于原文、真实有用，不要编造。\n请严格按如下 JSON 数组 Schema 输出（6–10 条）：\n" + schema;
+  _annotateTaskCache.set(language, block);
+  return block;
+}
+
+function buildAnnotateMessages(bookTitle, language, chapterTitle, text) {
+  const taskBlock = getAnnotateTask(language); // 按 language 固定
+  // System 完全固定 = COMMON_ROLE；批注指令与 schema 放入 user 消息，原文放最后
+  const user = taskBlock + "\n\n书名：《" + bookTitle + "》  章节：" + chapterTitle + "\n" + langName(language) + "原文：\n" + text;
   return [
-    {
-      role: "system",
-      content: COMMON_ROLE +
-        "\n\n本次任务：从一段" + lang + "文学原文中提取「高价值、值得个人收藏」的知识条目，建立用户的语言知识库。" +
-        "条目类型尽量多样：若干词汇（vocabulary）、若干地道表达（expressions）、若干精彩/典范句子（sentencePatterns 或 beautifulSentences）。" +
-        "每条都要基于原文、真实有用，不要编造。\n请严格按如下 JSON 数组 Schema 输出（6–10 条）：\n" + schema
-    },
-    {
-      role: "user",
-      content: "书名：《" + bookTitle + "》  章节：" + chapterTitle + "\n" + lang + "原文：\n" + text
-    }
+    { role: "system", content: COMMON_ROLE },
+    { role: "user", content: user }
   ];
 }
 
 /* ---------- 对外接口 ---------- */
-async function analyzeRecord(text, type, language) {
-  const msgs = buildAnalyzeMessages(text, type, language);
+async function analyzeRecord(text, type, language, context, retry) {
+  const msgs = buildAnalyzeMessages(text, type, language, context, retry);
   const content = await callLLM(msgs);
   const obj = extractJSON(content);
   if (!obj || !obj.category || !obj.data || typeof obj.data !== "object" || !Object.keys(obj.data).length) throw new Error("LLM 返回结构不符合预期");
+  // 规整 lemma：确保动词变位被还原为原型；若 LLM 未给 lemma 但有 word，留空由前端兜底
+  if (obj.data && obj.data.word && !obj.data.lemma) obj.data.lemma = null;
   return { category: obj.category, tags: obj.tags || [], data: obj.data };
 }
 

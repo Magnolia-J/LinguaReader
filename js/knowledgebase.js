@@ -242,6 +242,21 @@ function saveKB() { /* no-op：增删改已实时同步后端 */ }
 
 /* ---------- 条目增删（实时同步后端） ---------- */
 function addEntry(entry) {
+  // 去重：基于「分类 + 关键内容 + 书名」的指纹，若已存在相同条目，则覆盖更新而非新增，
+  // 避免同一句话 / 同一个单词被重复写入（既省本地空间，也避免云端重复数据膨胀）。
+  const fp = (typeof LRStorage !== "undefined" && LRStorage.kbFingerprint) ? LRStorage.kbFingerprint(entry) : null;
+  if (fp) {
+    const existing = KB.find((e) => LRStorage.kbFingerprint(e) === fp);
+    if (existing) {
+      const merged = Object.assign({}, existing, entry, { id: existing.id, createdAt: existing.createdAt });
+      const i = KB.indexOf(existing);
+      if (i >= 0) KB.splice(i, 1); // 移除旧条目
+      KB.unshift(merged);          // 最新置顶（不产生重复）
+      backupKB();
+      if (window.ApiClient) ApiClient.updateKb(merged.id, entry).catch((e) => console.warn("更新笔记失败：", e.message));
+      return merged;
+    }
+  }
   entry.id = entry.id || newId("kb");
   entry.createdAt = entry.createdAt || new Date().toISOString();
   KB.unshift(entry);

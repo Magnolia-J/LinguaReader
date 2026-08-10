@@ -36,6 +36,7 @@
       </div>
       <button id="stats-btn" class="btn btn-ghost" title="阅读统计：日历 / 周报 / 月报">📊 阅读统计</button>
       <button id="cloud-btn" class="btn btn-ghost" title="云同步：把词汇/句型/批注/进度备份到云端，多设备查看">☁ 云同步</button>
+      <button id="backup-btn" class="btn btn-ghost" title="本地自动备份与恢复：把书库/进度/批注/知识库备份到本地文件夹">💾 备份与恢复</button>
       <button id="export-btn" class="btn btn-primary" title="导出个人知识库">⬇ 导出知识库</button>
     </div>
   </header>
@@ -67,6 +68,12 @@
             <select id="chapter-select"></select>
             <button id="next-chap" class="btn btn-ghost">下一章 ›</button>
             <button id="annotate-btn" class="btn btn-ghost annotate-btn" title="调用后端 LLM 对全书做智能批注">⚡ 一键智能批注</button>
+          </div>
+          <div class="reader-tools">
+            <button class="rt-btn" id="rt-font-dec" title="缩小字号">A−</button>
+            <button class="rt-btn" id="rt-font-inc" title="放大字号">A+</button>
+            <button class="rt-btn" id="rt-lh" title="切换行距">行距</button>
+            <button class="rt-btn" id="rt-eye" title="护眼模式">护眼</button>
           </div>
         </div>
         <div id="reading-area" class="reading-area">
@@ -141,6 +148,7 @@
   <div id="selection-popup" class="selection-popup hidden">
     <button data-action="analyze" class="sp-btn">AI 分析</button>
     <button data-action="save" class="sp-btn">直接收藏</button>
+    <button data-action="highlight" class="sp-btn">🖍 高亮</button>
     <button data-action="annotate" class="sp-btn">✍ 写批注</button>
   </div>
 
@@ -151,15 +159,15 @@
         <h3>上传书籍</h3>
         <button class="modal-close" data-close-upload>×</button>
       </div>
-      <p class="modal-desc">支持 <b>.txt / .md</b>（自动分章、识别书名/作者/语言）；<b>.epub</b> 自动解析；PDF 请先转为纯文本。</p>
+      <p class="modal-desc">支持 <b>.txt / .md</b>（自动分章、识别书名/作者/语言）；<b>.epub</b> 自动解析章节、正文与书籍信息。也可直接粘贴纯文本。</p>
       <div id="drop-zone" class="drop-zone">
         <div class="dz-icon">⬆</div>
         <div>拖拽文件到此处，或 <label class="dz-link">点击选择
-          <input id="file-input" type="file" accept=".txt,.md,.text,.epub" hidden></label></div>
+          <input id="file-input" type="file" accept=".txt,.md,.text,.epub" multiple hidden></label></div>
         <div class="dz-formats">.txt · .md · .epub</div>
       </div>
       <div class="paste-box">
-        <textarea id="paste-text" placeholder="或将书籍纯文本粘贴到这里（适合 PDF 转出的文本）…"></textarea>
+        <textarea id="paste-text" placeholder="或将书籍纯文本粘贴到这里…"></textarea>
         <div class="paste-row">
           <input id="paste-title" class="inp" placeholder="书名（可选）">
           <input id="paste-author" class="inp" placeholder="作者（可选）">
@@ -332,9 +340,45 @@
     </div>
   </div>
 
+  <!-- 本地自动备份与恢复 -->
+  <div id="backup-modal" class="modal hidden">
+    <div class="modal-card backup-card">
+      <div class="modal-head">
+        <h3>💾 备份与恢复（仅本地）</h3>
+        <button class="modal-close" data-close-backup>×</button>
+      </div>
+      <p class="modal-desc">自动把书库、阅读进度、划线批注、阅读记录、知识库与设置备份到本地文件夹。不含原始 EPUB/TXT/PDF 二进制，不含密钥；不会上传到云端。</p>
+      <div class="backup-config">
+        <div class="backup-row">
+          <label class="backup-field">备份文件夹
+            <input id="backup-dir" class="inp" type="text" placeholder="例如 D:/LinguaReader/WorkbenchBackup">
+          </label>
+          <button class="btn" id="backup-browse" title="还原为默认文件夹">默认</button>
+        </div>
+        <div class="backup-row">
+          <label class="backup-check"><input id="backup-auto" type="checkbox" checked> 启用自动备份</label>
+          <label class="backup-field inline">保留天数
+            <input id="backup-retain" class="inp" type="number" min="1" step="1" value="7" style="width:80px">
+          </label>
+          <button class="btn btn-primary" id="backup-save-cfg">保存设置</button>
+        </div>
+      </div>
+      <div class="backup-actions">
+        <button class="btn btn-primary" id="backup-now">💾 立即备份</button>
+        <span id="backup-now-status" class="backup-status"></span>
+      </div>
+      <div class="backup-list-head">
+        <h4>历史备份</h4>
+        <button class="btn" id="backup-refresh">刷新</button>
+      </div>
+      <div id="backup-list" class="backup-list"></div>
+    </div>
+  </div>
+
   <!-- Supabase 云同步：CDN 提供全局 supabase；配置与同步逻辑 -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="js/supabase-config.js"></script>
+  <script src="js/storage-layers.js"></script>
   <script src="js/api.js"></script>
   <script src="js/sync.js"></script>
   <script src="js/books.js"></script>
@@ -343,8 +387,11 @@
   <script src="js/knowledgebase.js"></script>
   <script src="js/upload.js"></script>
   <script src="js/strictSelect.js"></script>
+  <script src="js/reading-ritual.js"></script>
+  <script src="js/highlights.js"></script>
   <script src="js/app.js"></script>
   <script src="js/stats.js"></script>
+  <script src="js/backup.js"></script>
   <!-- 轻量提示 toast -->
   <div id="toast" class="toast" aria-live="polite"></div>
 </body>

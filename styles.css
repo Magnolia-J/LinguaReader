@@ -14,6 +14,8 @@
   --hl-active: #ffe066;
   --radius: 12px;
   --shadow: 0 4px 18px rgba(31,45,38,.07);
+  --lr-fs: 17px;        /* 阅读区正文字号（可被阅读控件调整） */
+  --lr-lh: 1.7;         /* 阅读区行距（可被阅读控件调整） */
   font-synthesis: none;
 }
 
@@ -116,6 +118,10 @@ body{
   align-self:flex-start; font-size:11px; padding:1px 7px; border-radius:20px;
   background:var(--brand-soft); color:var(--brand); margin-top:2px;
 }
+.book-card .bc-format{
+  align-self:flex-start; font-size:11px; padding:1px 7px; border-radius:20px;
+  background:#eaf1ff; color:#3a6ea5; margin-top:2px; font-weight:600;
+}
 
 /* 书库：搜索框 + 分类 */
 .lib-tools{
@@ -179,23 +185,71 @@ body{
   border:1px solid var(--line); border-radius:8px; padding:5px 8px; font-size:12px;
   background:var(--panel-2); color:var(--ink); max-width:200px;
 }
+/* 阅读舒适度控件 */
+.reader-tools{display:flex; align-items:center; gap:4px; margin-left:6px;}
+.reader-tools .rt-btn{
+  border:1px solid var(--line); background:var(--panel-2); color:var(--ink-soft);
+  border-radius:8px; padding:4px 8px; font-size:12px; cursor:pointer; line-height:1; transition:.15s;
+}
+.reader-tools .rt-btn:hover{border-color:var(--brand); color:var(--brand);}
+.reader-tools .rt-btn.active{background:var(--brand-soft); color:var(--brand); border-color:var(--brand); font-weight:600;}
+@media (max-width:720px){ .reader-tools .rt-btn{padding:4px 6px;} .reader-tools{margin-left:0;} }
 
 /* 原文阅读区 */
 .reading-area{
-  padding:22px 26px; overflow-y:auto; flex:1; line-height:1.95;
-  font-size:16px; color:#28323f;
+  padding:22px 26px; overflow-y:auto; flex:1; line-height:var(--lr-lh);
+  font-size:var(--lr-fs); color:#28323f;
 }
 .reading-area .placeholder{color:var(--ink-soft);}
-.reading-area p{margin:0 0 16px; text-align:justify;}
+.reading-area p{margin:0 0 16px; text-align:justify; font-size:var(--lr-fs); line-height:var(--lr-lh);}
 .reading-area .page-mark{
   font-size:12px; color:var(--ink-soft); text-align:right; margin:18px 0 4px;
   border-top:1px dashed var(--line); padding-top:6px;
 }
-mark.hl{
-  background:var(--hl); border-radius:3px; padding:0 2px; cursor:pointer;
-  transition:.15s;
+/* 划线 / 批注 mark：绑定文本字符偏移，柔和浅色底，悬停微亮；带批注的加下点线 */
+.lr-mark{
+  background:#fff1a8; border-radius:3px; padding:0 1px; cursor:pointer;
+  box-decoration-break:clone; -webkit-box-decoration-break:clone; transition:background .15s;
 }
-mark.hl:hover, mark.hl.active{background:var(--hl-active);}
+.lr-mark.has-note{ border-bottom:2px solid var(--brand); }
+.lr-mark:hover{ background:#ffe066; }
+/* 护眼模式：阅读区暖米底，降低对比度 */
+body.eye-care .reading-area{ background:#f5efd9; color:#4a4133; }
+body.eye-care .reading-area .page-mark{ color:#8a7f5e; border-top-color:#e2d8b0; }
+
+/* 划线/批注浮动菜单 */
+.mark-menu{
+  position:fixed; z-index:1200; background:#fff; border:1px solid var(--line);
+  border-radius:10px; box-shadow:var(--shadow); padding:4px; display:flex; flex-direction:column; min-width:96px;
+}
+.mark-menu .mm-btn{
+  border:none; background:transparent; text-align:left; padding:7px 10px; border-radius:7px;
+  font-size:13px; cursor:pointer; color:var(--ink);
+}
+.mark-menu .mm-btn:hover{ background:var(--brand-soft); }
+.mark-menu .mm-del:hover{ background:#fde8e2; color:var(--warn); }
+
+/* 划线后撤销提示 */
+#lr-undo-toast{
+  position:fixed; left:50%; bottom:22px; transform:translateX(-50%); z-index:1300;
+  background:var(--panel); color:var(--ink); border:1px solid var(--line);
+  border-radius:10px; box-shadow:var(--shadow); padding:8px 12px; display:flex; align-items:center; gap:10px;
+  font-size:13px; animation:lr-toast-in .25s ease-out;
+}
+#lr-undo-toast .lr-undo-btn{
+  border:1px solid var(--brand); background:var(--brand-soft); color:var(--brand);
+  border-radius:7px; padding:4px 10px; font-size:12px; cursor:pointer; font-weight:600;
+}
+#lr-undo-toast .lr-undo-btn:hover{ background:var(--brand); color:#fff; }
+#lr-undo-toast .lr-undo-close{
+  border:none; background:transparent; color:var(--ink-soft); font-size:16px; line-height:1;
+  cursor:pointer; padding:0 2px;
+}
+#lr-undo-toast .lr-undo-close:hover{ color:var(--ink); }
+@keyframes lr-toast-in{
+  from{ opacity:0; transform:translate(-50%, 10px); }
+  to{ opacity:1; transform:translate(-50%, 0); }
+}
 
 /* AI 面板 */
 .ai-mode-badge{
@@ -289,16 +343,22 @@ mark.hl:hover, mark.hl.active{background:var(--hl-active);}
   font-size:12px; padding:5px 10px; border-radius:6px;
 }
 .selection-popup .sp-btn:hover{background:rgba(255,255,255,.15);}
+@media (max-width:480px){
+  .selection-popup{flex-wrap:wrap; max-width:92vw; justify-content:center;}
+  .selection-popup .sp-btn{padding:7px 9px; font-size:12px;}
+}
 
 /* 弹窗 */
 .modal{
   position:fixed; inset:0; background:rgba(20,26,38,.45);
-  display:flex; align-items:center; justify-content:center; z-index:100;
+  display:flex; align-items:flex-start; justify-content:center; z-index:100;
+  padding:20px 0; overflow-y:auto;
 }
 .modal.hidden, .selection-popup.hidden, .hidden{display:none !important;}
 .modal-card{
   background:var(--panel); border-radius:14px; padding:24px; width:440px; max-width:92vw;
   box-shadow:0 20px 60px rgba(0,0,0,.3);
+  max-height:calc(100vh - 40px); overflow-y:auto; margin:auto;
 }
 .modal-head{display:flex; align-items:center; justify-content:space-between;}
 .modal-head h3{margin:0; font-size:17px;}
@@ -678,3 +738,61 @@ mark.hl:hover, mark.hl.active{background:var(--hl-active);}
 .cloud-actions .btn{flex:1;}
 .cloud-hint{font-size:12px; color:var(--ink-soft); margin-top:14px; line-height:1.6;}
 .cloud-status{font-size:13px; color:var(--ink); background:var(--panel-2); border:1px solid var(--line); border-radius:10px; padding:12px 14px; line-height:1.7;}
+
+/* ---------- 原型（Lemma）可编辑 ---------- */
+.ai-lemma-edit{font-size:14px; font-weight:600; padding:3px 8px; border:1px solid var(--line); border-radius:8px; width:min(220px, 60%); background:var(--panel); color:var(--ink);}
+.ai-lemma-raw{color:var(--ink-soft); font-size:12px; margin:0 6px;}
+.ai-lemma-save{margin-left:4px; padding:3px 10px; border:1px solid var(--accent, #6c5ce7); border-radius:8px; background:var(--accent, #6c5ce7); color:#fff; cursor:pointer; font-size:12px;}
+.ai-lemma-lock{font-size:12px; margin-left:4px;}
+
+/* ---------- 多段分析合并 ---------- */
+.ai-seg{border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin:10px 0; background:var(--panel-2);}
+.ai-seg-head{font-size:12px; font-weight:700; color:var(--accent, #6c5ce7); margin-bottom:6px;}
+.ai-seg-note, .seg-note{font-size:12px; color:var(--ink-soft); background:var(--panel-2); border-left:3px solid var(--accent, #6c5ce7); padding:6px 10px; margin:8px 0; border-radius:6px;}
+
+/* ---------- 知识库原型内联编辑 ---------- */
+.kb-lemma-edit{margin-left:8px; padding:2px 8px; font-size:11px; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--ink-soft); cursor:pointer;}
+.kb-lemma-edit:hover{border-color:var(--accent, #6c5ce7); color:var(--accent, #6c5ce7);}
+.kb-lemma-input{font-size:14px; font-weight:600; padding:2px 6px; border:1px solid var(--accent, #6c5ce7); border-radius:6px; width:min(200px,55%);}
+.kb-lemma-ok, .kb-lemma-cancel{margin-left:4px; padding:2px 8px; border-radius:6px; cursor:pointer; border:1px solid var(--line); background:var(--panel);}
+.kb-lemma-ok{color:#fff; background:var(--accent, #6c5ce7); border-color:var(--accent, #6c5ce7);}
+
+/* ---------- 「上次读到这里」阅读位置标记 ---------- */
+/* reading-area 设为定位上下文，使标记按内容坐标锚定在具体段落处（随滚动一起移动） */
+.reading-area{ position:relative; }
+.lastread-marker{
+  position:absolute; left:0; right:0; height:0; z-index:6;
+  pointer-events:none;                 /* 横线不挡文本选择，仅标签可点击 */
+  transition:opacity .7s ease;
+}
+.lastread-marker::before{
+  content:""; position:absolute; left:0; right:0; top:0;
+  border-top:2px dashed var(--warn); opacity:.85;
+}
+.lastread-label{
+  position:absolute; top:-11px; left:10px;
+  font-size:12px; font-weight:600; color:#fff;
+  background:var(--warn); padding:1px 9px; border-radius:12px;
+  pointer-events:auto; cursor:pointer; white-space:nowrap;
+  box-shadow:0 2px 8px rgba(225,112,85,.35);
+}
+.lastread-marker.faded{ opacity:0; }   /* 用户继续阅读后淡出，进度数据仍保留 */
+
+/* ===== 本地自动备份与恢复弹窗 ===== */
+.backup-card{ max-width:560px; }
+.backup-config{ margin-bottom:14px; }
+.backup-row{ display:flex; align-items:center; gap:10px; margin:10px 0; flex-wrap:wrap; }
+.backup-field{ display:flex; flex-direction:column; font-size:13px; color:var(--ink-soft); gap:4px; flex:1; min-width:200px; }
+.backup-field.inline{ flex-direction:row; align-items:center; gap:6px; flex:0 0 auto; min-width:0; }
+.backup-field .inp{ width:100%; }
+.backup-check{ display:flex; align-items:center; gap:6px; font-size:13px; color:var(--ink); }
+.backup-actions{ display:flex; align-items:center; gap:12px; margin:6px 0 16px; }
+.backup-status{ font-size:13px; color:var(--ink-soft); }
+.backup-list-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+.backup-list-head h4{ margin:0; font-size:15px; }
+.backup-list{ max-height:320px; overflow:auto; border:1px solid var(--line); border-radius:10px; }
+.backup-empty{ padding:18px; font-size:13px; color:var(--ink-soft); text-align:center; }
+.backup-item{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px; border-bottom:1px solid var(--line); }
+.backup-item:last-child{ border-bottom:none; }
+.backup-item-name{ font-size:13px; font-weight:600; word-break:break-all; }
+.backup-item-meta{ font-size:12px; color:var(--ink-soft); margin-top:2px; }

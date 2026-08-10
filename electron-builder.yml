@@ -1,0 +1,47 @@
+# Electron Builder 配置 —— 外语阅读工作台 独立桌面应用
+appId: com.linguareader.desktop
+productName: 外语阅读工作台
+copyright: Copyright © 2026 LinguaReader
+
+directories:
+  output: dist
+  buildResources: .
+
+# 入口（Electron 主进程）。项目根 package.json 的 main 已指向此文件。
+main: electron/main.js
+
+# 显式声明要打进安装包的文件。
+# 注意：node_modules 必须纳入（electron-builder 会自动只保留“生产依赖”，
+# 即 @supabase/supabase-js；electron/electron-builder 属 devDependencies 会自动剔除）。
+# 未在此列表中的内容（data/、WorkbenchBackup/、sim_test/、test_*、.workbuddy、docs 等）
+# 不会被打进包，运行期数据改存用户数据目录（AppData），保证自包含且不泄露用户数据。
+files:
+  - package.json
+  - index.html
+  - styles.css
+  - manifest.json
+  - icon.svg
+  - app-icon.png
+  - app-icon.ico
+  - server.js
+  - llm.js
+  - js/**/*
+  - electron/**/*
+  - node_modules/**/*
+
+# 额外排除（即使匹配上面也不打进包）
+exclude:
+  - "**/.workbuddy/**"
+  - server.log
+  - "**/*.log"
+
+win:
+  target:
+    - dir          # 产出 win-unpacked/ 文件夹，内含 LinguaReader.exe（直接双击运行）
+  icon: app-icon.ico
+
+# 构建期 electron 二进制镜像（仅构建用，不影响运行时）
+electronDownload:
+  mirror: https://npmmirror.com/mirrors/electron/
+
+publish: null

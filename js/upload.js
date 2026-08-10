@@ -53,7 +53,14 @@ function handleFile(file) {
     reader.onload = () => {
       parseEpub(reader.result)
         .then(book => finishParse(book))
-        .catch(err => { console.warn(err); alert("EPUB 解析失败，请改用 .txt 或粘贴文本。\n" + err.message); });
+        .catch(err => {
+          console.warn("[upload] EPUB 解析失败：", err);
+          const detail = err && err.message ? err.message : String(err);
+          const hint = detail.includes("Failed to fetch")
+            ? "浏览器解压该 EPUB 时失败。建议：\n1. 按 Ctrl+Shift+R 硬刷新（清 Service Worker 旧缓存）；\n2. 若仍失败，把 EPUB 用 Calibre「重新保存」一次再试；\n3. 或直接解压出 .txt / .html 粘贴。"
+            : "EPUB 解析失败，请改用 .txt 或粘贴文本。";
+          alert(hint + "\n\n技术信息：" + detail);
+        });
     };
     reader.readAsArrayBuffer(file);
   } else {
@@ -223,6 +230,28 @@ async function inflateRaw(u8) {
   return new Uint8Array(ab);
 }
 
+/* 某些 EPUB 生成器把 zlib wrapped deflate（带 2 字节 header + 4 字节 adler32 尾）
+ * 当成 raw deflate 塞进 zip。浏览器只有 deflate-raw，因此失败后尝试剥掉 zlib wrapper。 */
+async function inflateWithFallback(u8, entryName) {
+  const tryRaw = async (data) => {
+    const ds = new DecompressionStream("deflate-raw");
+    const writer = ds.writable.getWriter();
+    writer.write(data); writer.close();
+    return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+  };
+  try { return await tryRaw(u8); } catch (firstErr) {
+    // 尝试跳过 zlib header（常见 78 9C / 78 DA / 78 01）并截断 adler32 尾
+    if (u8.length > 6 && u8[0] === 0x78 && (u8[1] === 0x9C || u8[1] === 0xDA || u8[1] === 0x01)) {
+      try {
+        const stripped = u8.slice(2, u8.length - 4);
+        return await tryRaw(stripped);
+      } catch (secondErr) { /* 继续抛出第一次错误，更原始 */ }
+    }
+    console.warn(`[epub] 解压失败：${entryName || "?"}，方法=8，大小=${u8.length}，首字节=${u8[0].toString(16)} ${u8[1]?.toString(16)}`);
+    throw firstErr;
+  }
+}
+
 async function parseZip(buf) {
   const dv = new DataView(buf);
   const u8 = new Uint8Array(buf);
@@ -253,7 +282,7 @@ async function parseZip(buf) {
 
 async function getEntryBytes(entries, buf, entry) {
   const slice = new Uint8Array(buf, entry.dataStart, entry.dataEnd - entry.dataStart);
-  if (entry.method === 8) return await inflateRaw(slice);
+  if (entry.method === 8) return await inflateWithFallback(slice, entry.name);
   return slice;
 }
 
@@ -287,7 +316,12 @@ function extractTitle(html) {
 }
 
 async function parseEpub(buffer) {
+  if (!buffer || buffer.byteLength < 4) throw new Error("文件为空或过小");
+  const sig = new DataView(buffer).getUint32(0, true);
+  if (sig !== 0x04034b50 && sig !== 0x06054b50) throw new Error("文件不是有效的 ZIP/EPUB（可能已损坏）");
+
   const entries = await parseZip(buffer);
+  if (!entries.length) throw new Error("ZIP 包内未找到任何文件");
 
   // 定位 OPF
   const cont = entries.find(e => e.name.toLowerCase().endsWith("container.xml"));
@@ -302,18 +336,21 @@ async function parseEpub(buffer) {
   }
   if (!opfPath) throw new Error("未找到 OPF 元数据");
 
-  const opf = new TextDecoder().decode(await getEntryBytes(entries, buffer, entries.find(e => e.name === opfPath)));
-  let title = extractTag(opf, "dc:title") || "未命名书籍";
-  let author = extractTag(opf, "dc:creator") || "未知";
+  let opfXml = "";
+  try {
+    opfXml = new TextDecoder().decode(await getEntryBytes(entries, buffer, entries.find(e => e.name === opfPath)));
+  } catch (e) { throw new Error(`OPF 元数据解压失败：${e.message || e}`); }
+  let title = extractTag(opfXml, "dc:title") || "未命名书籍";
+  let author = extractTag(opfXml, "dc:creator") || "未知";
 
   const base = opfPath.includes("/") ? opfPath.slice(0, opfPath.lastIndexOf("/") + 1) : "";
   const idToHref = {};
   let m;
   const itemRe = /<item\s+([^>]*?)\/?>/g;
-  while ((m = itemRe.exec(opf))) { const id = attr(m[1], "id"); const href = attr(m[1], "href"); if (id && href) idToHref[id] = href; }
+  while ((m = itemRe.exec(opfXml))) { const id = attr(m[1], "id"); const href = attr(m[1], "href"); if (id && href) idToHref[id] = href; }
   const order = [];
   const spineRe = /<itemref\s+([^>]*?)\/?>/g;
-  while ((m = spineRe.exec(opf))) { const idref = attr(m[1], "idref"); if (idref && idToHref[idref]) order.push(idToHref[idref]); }
+  while ((m = spineRe.exec(opfXml))) { const idref = attr(m[1], "idref"); if (idref && idToHref[idref]) order.push(idToHref[idref]); }
   let files = order.length ? order : Object.values(idToHref).filter(h => /\.x?html?$/i.test(h));
 
   const chapters = [];
@@ -321,22 +358,26 @@ async function parseEpub(buffer) {
     const full = base + rel;
     const entry = entries.find(e => e.name === full || e.name.endsWith("/" + rel));
     if (!entry) continue;
-    const html = new TextDecoder().decode(await getEntryBytes(entries, buffer, entry));
-    const paras = extractParagraphs(html);
-    if (paras.length) chapters.push({ title: extractTitle(html) || title, pages: "", paragraphs: paras.slice(0, 60) });
+    try {
+      const html = new TextDecoder().decode(await getEntryBytes(entries, buffer, entry));
+      const paras = extractParagraphs(html);
+      if (paras.length) chapters.push({ title: extractTitle(html) || title, pages: "", paragraphs: paras.slice(0, 60) });
+    } catch (e) { console.warn(`[epub] 跳过章节 ${rel}：`, e.message || e); }
   }
 
   // 回退：扫描全部 xhtml
   if (!chapters.length) {
     for (const e of entries) {
       if (/\.x?html?$/i.test(e.name)) {
-        const html = new TextDecoder().decode(await getEntryBytes(entries, buffer, e));
-        const paras = extractParagraphs(html);
-        if (paras.length) chapters.push({ title: extractTitle(html) || e.name, pages: "", paragraphs: paras.slice(0, 60) });
+        try {
+          const html = new TextDecoder().decode(await getEntryBytes(entries, buffer, e));
+          const paras = extractParagraphs(html);
+          if (paras.length) chapters.push({ title: extractTitle(html) || e.name, pages: "", paragraphs: paras.slice(0, 60) });
+        } catch (e) { console.warn(`[epub] 跳过文件 ${e.name}：`, e.message || e); }
       }
     }
   }
-  if (!chapters.length) throw new Error("EPUB 内未解析出正文");
+  if (!chapters.length) throw new Error("EPUB 内未解析出正文（可能所有章节都解压失败）");
 
   const sample = chapters.slice(0, 5).map(c => c.paragraphs.join(" ")).join(" ").slice(0, 2000);
   return buildBook(title, author, detectLanguage(sample), chapters);

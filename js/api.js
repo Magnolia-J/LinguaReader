@@ -55,7 +55,8 @@ const ApiClient = (function () {
       prefs: { enabledDicts: [], categories: [] },
       reading: { seconds: {}, byDate: {}, byBookDay: {} },
       checkins: {},
-      lastBookId: null
+      lastBookId: null,
+      lemmaOverrides: {}
     };
   }
   function loadLocal() {
@@ -214,14 +215,39 @@ const ApiClient = (function () {
       (s) => { const x = s.books.find((b) => b.id === id); if (x) Object.assign(x, patch); return patch; },
       () => req("PUT", "/api/books/" + encodeURIComponent(id), patch)
     ),
-    setProgress: (id, chapter) => localThen(
-      (s) => { s.progress[id] = chapter; },
-      () => req("PUT", "/api/books/" + encodeURIComponent(id) + "/progress", { chapter }),
+    setProgress: (id, chapter, scroll, extra) => localThen(
+      (s) => {
+        const cur = (s.progress[id] && typeof s.progress[id] === "object") ? s.progress[id] : {};
+        const prog = {
+          c: (typeof chapter === "number") ? chapter : (cur.c || 0),
+          s: (typeof scroll === "number") ? scroll : (cur.s || 0),
+          u: Date.now()
+        };
+        if (extra) {
+          if (typeof extra.pid === "number") prog.pid = extra.pid;
+          if (typeof extra.off === "number") prog.off = extra.off;
+          if (typeof extra.fp === "string") prog.fp = extra.fp;
+          if (typeof extra.page === "number") prog.page = extra.page;
+          if (typeof extra.note === "string") prog.note = extra.note;
+        }
+        s.progress[id] = prog;
+      },
+      () => {
+        const body = { chapter, scroll };
+        if (extra) Object.assign(body, extra);
+        return req("PUT", "/api/books/" + encodeURIComponent(id) + "/progress", body);
+      },
       true
     ),
     setLastBook: (id) => localThen(
       (s) => { s.lastBookId = id; },
       () => req("PUT", "/api/lastbook", { id }),
+      true
+    ),
+    /* 用户确认的原型（Lemma）覆盖 */
+    setLemmaOverride: (key, lemma) => localThen(
+      (s) => { s.lemmaOverrides = s.lemmaOverrides || {}; s.lemmaOverrides[key] = lemma; },
+      () => req("PUT", "/api/lemma-override", { key, lemma }),
       true
     ),
     deleteBook: (id) => localThen(
@@ -266,7 +292,14 @@ const ApiClient = (function () {
 
     /* AI（依赖后端 LLM，纯静态部署无此能力，调用会失败——属预期） */
     analyze: (p) => req("POST", "/api/analyze", p),
-    annotate: (bookId) => req("POST", "/api/annotate", { bookId })
+    annotate: (bookId) => req("POST", "/api/annotate", { bookId }),
+
+    /* 本地备份与恢复（WorkbenchBackup，仅本地磁盘，不进 Supabase，不备份密钥） */
+    backupConfig: () => req("GET", "/api/backup/config"),
+    setBackupConfig: (cfg) => req("PUT", "/api/backup/config", cfg),
+    backupNow: () => req("POST", "/api/backup"),
+    listBackups: () => req("GET", "/api/backups"),
+    restoreBackup: (name) => req("POST", "/api/backup/restore", { name })
   };
 })();
 
