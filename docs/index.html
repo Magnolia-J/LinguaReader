@@ -42,15 +42,15 @@
     box-shadow: var(--shadow);
     display: flex; align-items: center; gap: 10px;
   }
-  header h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: .3px; flex: 1; }
-  header .src { font-size: 11px; opacity: .9; margin-top: 2px; }
+  header h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: .3px; flex: 1; display: flex; align-items: center; min-width: 0; }
+  header h1 .title-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  header .src { font-size: 12px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: rgba(255,255,255,.95); text-shadow: 0 1px 1px rgba(0,0,0,.12); }
   .hbtn {
     background: rgba(255,255,255,.18); color: #fff; border: none; border-radius: 10px;
     height: 38px; padding: 0 12px; font-size: 14px; cursor: pointer; flex: 0 0 auto;
     display: flex; align-items: center; justify-content: center; gap: 4px;
   }
   .hbtn:active { background: rgba(255,255,255,.32); }
-  .mode-pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(255,255,255,.2); margin-left: 6px; }
 
   .tabs {
     position: sticky; top: 0; z-index: 19;
@@ -119,6 +119,12 @@
   ul.li { margin: 4px 0 0; padding-left: 18px; }
   ul.li li { margin: 2px 0; font-size: 13.5px; }
   .kb-foot { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); font-size: 12px; color: var(--sub); display: flex; justify-content: space-between; gap: 8px; }
+  /* 精彩句：默认只显示原句，点击卡片后展开 AI 分析 */
+  .kb-detail { display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .kb-card.expanded .kb-detail { display: block; }
+  .kb-toggle { margin-top: 10px; font-size: 12.5px; font-weight: 700; color: var(--brand); display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+  .kb-toggle::before { content: "\25B8"; display: inline-block; transition: transform .2s; }
+  .kb-card.expanded .kb-toggle::before { content: "\25BE"; }
 
   .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
   .stat {
@@ -205,7 +211,7 @@
 
 <header>
   <div style="flex:1">
-    <h1>📖 LinguaReader<span class="mode-pill" id="mode-pill">…</span></h1>
+    <h1><span class="title-text">📖 LinguaReader</span></h1>
     <div class="src" id="src">连接中…</div>
   </div>
   <button class="hbtn" id="refresh-btn" title="刷新">↻</button>
@@ -220,7 +226,7 @@
 
 <div class="wrap">
   <section class="panel on" id="panel-kb">
-    <input class="search" id="kb-search" type="search" placeholder="🔍 搜索词条 / 书名 / 释义…" />
+    <input class="search" id="kb-search" type="search" placeholder="🔍 搜索词条 / 书名 / 释义…" autocomplete="off" />
     <div class="kb-filter-row">
       <div class="kb-filter-col">
         <div class="kb-filter-label">🗂 分类</div>
@@ -294,12 +300,7 @@ let userEmail = "";
 
 /* ============ 工具 ============ */
 function setSrc(t){ const el=document.getElementById("src"); if(el) el.textContent=t; }
-function setMode(m){
-  const pill=document.getElementById("mode-pill");
-  const map={ live:["● 实时","#bbf7d0"], conn:["连接中","#fef9c3"], login:["未登录","#fecaca"] };
-  const [t,c]=map[m]||["…","#e5e7eb"];
-  pill.textContent=t; pill.style.background=c;
-}
+function setMode(m){ /* 顶部状态徽章已移除 */ return; }
 function fmtDur(sec){
   sec = Math.round(sec || 0);
   if (sec < 60) return sec + " 秒";
@@ -456,9 +457,12 @@ function renderKbCard(item){
   const color = CAT_COLORS[cat] || "#0f766e";
   const label = CAT_LABELS[cat] || cat;
   const f = item.fields || {};
-  // 统一兜底主标题：任何分类都能从常见字段提取，避免空白卡片
+  // 统一兜底主标题：任何分类都不出现空白主标题（兼容旧数据 / 特殊结构）
   let term = f.expression || f.sentence || f.word || f.originalForm || f.quote || f.text || f.title || "";
-  let body = "";
+  let body = "";        // 默认展开的主体内容
+  let detail = "";      // 可折叠的“分析”区域（仅精彩句使用）
+  let expandable = false;
+
   if (cat === "vocabulary"){
     term = f.word || "";
     (f.defs||[]).forEach(d => { body += `<div class="def"><span class="dict">${esc(d.dict||"")}</span>${esc(d.text||"")}</div>`; });
@@ -466,24 +470,27 @@ function renderKbCard(item){
     if (f.collocations && f.collocations.length) body += rowList("搭配", f.collocations);
     if (f.examples && f.examples.length) body += rowList("例句", f.examples);
   } else if (cat === "expressions"){
-    // 表达库兼容 3 种字段结构：expression 型 / sentence 型 / word(词汇)型
+    // 兼容三种结构：expression 型 / sentence 型 / word 型，避免空卡片
     term = f.expression || f.sentence || f.word || f.originalForm || "";
     if (f.meaning) body += row("释义", f.meaning);
     if (f.usage) body += row("用法", f.usage);
     if (f.example) body += row("例句", f.example);
     if (f.similar && f.similar.length) body += rowList("近义", f.similar);
     if (f.translation) body += row("译文", f.translation);
-    if (f.structure) body += (Array.isArray(f.structure) ? rowList("结构", f.structure) : row("结构", f.structure));
     if (f.grammar) body += row("语法", f.grammar);
     if (f.pattern) body += row("句型", f.pattern);
-    if (f.writingUsage) body += row("写作应用", f.writingUsage);
-    if (f.defs && f.defs.length) body += rowList("释义", f.defs.map(d => (d.text || String(d))));
     if (f.context) body += row("语境", f.context);
-    if (f.collocations && f.collocations.length) body += rowList("搭配", f.collocations);
+    if (f.defs && f.defs.length) body += rowList("释义", f.defs.map(d => (d.text||"") + (d.dict ? (" ["+d.dict+"]") : "")));
     if (f.examples && f.examples.length) body += rowList("例句", f.examples);
-    if (f.lemma) body += row("原型", f.lemma);
-    if (f.pos) body += row("词性", f.pos);
-    if (f.grammarRole) body += row("句法角色", f.grammarRole);
+    // 兜底：未被识别的其它字段也展示，绝不丢失数据
+    const knownE = new Set(["expression","sentence","word","originalForm","meaning","usage","example","similar","translation","grammar","pattern","context","defs","examples","lemma","pos","collocations","grammarRole","learningValue","lemmaConfirmed","verbInfo"]);
+    for (const [k,v] of Object.entries(f)){
+      if (!knownE.has(k) && v != null && v !== ""){
+        if (Array.isArray(v)) body += rowList(k, v.map(String));
+        else if (typeof v === "object") body += row(k, JSON.stringify(v));
+        else body += row(k, String(v));
+      }
+    }
   } else if (cat === "sentencePatterns"){
     term = f.sentence || "";
     if (f.translation) body += row("译文", f.translation);
@@ -492,26 +499,47 @@ function renderKbCard(item){
     if (f.grammar) body += row("语法", f.grammar);
     if (f.writingUsage) body += row("写作应用", f.writingUsage);
   } else if (cat === "beautifulSentences" || cat === "sentences" || cat === "quotes"){
-    // 精彩句/佳句：首行完整显示原句，再展示分析字段
-    term = f.sentence || f.quote || f.text || f.title || f.expression || "";
-    if (f.translation) body += row("译文", f.translation);
-    if (f.pattern) body += row("句型", f.pattern);
-    if (f.structure && f.structure.length) body += rowList("结构", f.structure);
-    if (f.grammar) body += row("语法", f.grammar);
-    if (f.writingUsage) body += row("写作应用", f.writingUsage);
-    if (f.author) body += row("作者", f.author);
-    if (f.source) body += row("出处", f.source);
+    // 精彩句：默认只显示原句；点击卡片后展开显示 AI 分析
+    term = f.sentence || f.quote || f.text || f.title || f.expression || f.word || "";
+    // 把所有“分析类”字段放入可折叠区域
+    const a = [];
+    if (f.translation) a.push(row("译文", f.translation));
+    if (f.pattern) a.push(row("句型", f.pattern));
+    if (f.structure && f.structure.length) a.push(rowList("结构", f.structure));
+    if (f.grammar) a.push(row("语法", f.grammar));
+    if (f.writingUsage) a.push(row("写作应用", f.writingUsage));
+    if (f.meaning) a.push(row("释义", f.meaning));
+    if (f.usage) a.push(row("用法", f.usage));
+    if (f.example) a.push(row("例句", f.example));
+    if (f.similar && f.similar.length) a.push(rowList("近义", f.similar));
+    // 兜底：其它字段也放进分析区，保证数据不丢失
+    const knownB = new Set(["sentence","quote","text","title","expression","word","translation","pattern","structure","grammar","writingUsage","meaning","usage","example","similar"]);
+    for (const [k,v] of Object.entries(f)){
+      if (!knownB.has(k) && v != null && v !== ""){
+        if (Array.isArray(v)) a.push(rowList(k, v.map(String)));
+        else if (typeof v === "object") a.push(row(k, JSON.stringify(v)));
+        else a.push(row(k, String(v)));
+      }
+    }
+    detail = a.join("");
+    expandable = a.length > 0;
   } else {
+    // 通用分支（其他分类：批注 / 文学笔记 等）
     for (const [k,v] of Object.entries(f)){
       if (Array.isArray(v)) body += rowList(k, v.map(String));
       else if (typeof v === "object") body += row(k, JSON.stringify(v));
       else body += row(k, String(v));
     }
   }
-  return `<div class="kb-card">
+
+  const detailHtml = detail ? `<div class="kb-detail">${detail}</div>` : "";
+  const toggleHtml = expandable ? `<div class="kb-toggle">查看分析</div>` : "";
+  return `<div class="kb-card${expandable ? " kb-expandable" : ""}">
     <div class="kb-head"><span class="badge" style="background:${color}">${esc(label)}</span></div>
     <div class="kb-term">${esc(term)}</div>
     ${body}
+    ${detailHtml}
+    ${toggleHtml}
     <div class="kb-foot"><span>📖 ${esc(item.book||"")}${item.author?" · "+esc(item.author):""}</span><span>${fmtDate(item.createdAt)}</span></div>
   </div>`;
 }
@@ -588,7 +616,18 @@ async function reload(){
 
 (function init(){
   bindTabs();
-  document.getElementById("kb-search").addEventListener("input", e => { kbQ = e.target.value; renderKb(); });
+  const kbSearchEl = document.getElementById("kb-search");
+  if (kbSearchEl) { kbSearchEl.value = ""; setTimeout(() => { kbSearchEl.value = ""; }, 100); }
+  kbSearchEl.addEventListener("input", e => { kbQ = e.target.value; renderKb(); });
+  // 精彩句卡片：点击展开 / 收起 AI 分析
+  const kbListEl = document.getElementById("kb-list");
+  if (kbListEl) kbListEl.addEventListener("click", e => {
+    const card = e.target.closest(".kb-expandable");
+    if (!card) return;
+    card.classList.toggle("expanded");
+    const t = card.querySelector(".kb-toggle");
+    if (t) t.textContent = card.classList.contains("expanded") ? "收起分析" : "查看分析";
+  });
   document.getElementById("refresh-btn").addEventListener("click", () => { toast("刷新中…"); reload(); });
   document.getElementById("logout-btn").addEventListener("click", doSignOut);
   document.getElementById("btn-signin").addEventListener("click", doSignIn);

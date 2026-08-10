@@ -119,6 +119,12 @@
   ul.li { margin: 4px 0 0; padding-left: 18px; }
   ul.li li { margin: 2px 0; font-size: 13.5px; }
   .kb-foot { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); font-size: 12px; color: var(--sub); display: flex; justify-content: space-between; gap: 8px; }
+  /* 精彩句：默认只显示原句，点击卡片后展开 AI 分析 */
+  .kb-detail { display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .kb-card.expanded .kb-detail { display: block; }
+  .kb-toggle { margin-top: 10px; font-size: 12.5px; font-weight: 700; color: var(--brand); display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+  .kb-toggle::before { content: "\25B8"; display: inline-block; transition: transform .2s; }
+  .kb-card.expanded .kb-toggle::before { content: "\25BE"; }
 
   .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
   .stat {
@@ -220,7 +226,7 @@
 
 <div class="wrap">
   <section class="panel on" id="panel-kb">
-    <input class="search" id="kb-search" type="search" placeholder="🔍 搜索词条 / 书名 / 释义…" />
+    <input class="search" id="kb-search" type="search" placeholder="🔍 搜索词条 / 书名 / 释义…" autocomplete="off" />
     <div class="kb-filter-row">
       <div class="kb-filter-col">
         <div class="kb-filter-label">🗂 分类</div>
@@ -451,7 +457,12 @@ function renderKbCard(item){
   const color = CAT_COLORS[cat] || "#0f766e";
   const label = CAT_LABELS[cat] || cat;
   const f = item.fields || {};
-  let term = "", body = "";
+  // 统一兜底主标题：任何分类都不出现空白主标题（兼容旧数据 / 特殊结构）
+  let term = f.expression || f.sentence || f.word || f.originalForm || f.quote || f.text || f.title || "";
+  let body = "";        // 默认展开的主体内容
+  let detail = "";      // 可折叠的“分析”区域（仅精彩句使用）
+  let expandable = false;
+
   if (cat === "vocabulary"){
     term = f.word || "";
     (f.defs||[]).forEach(d => { body += `<div class="def"><span class="dict">${esc(d.dict||"")}</span>${esc(d.text||"")}</div>`; });
@@ -459,11 +470,27 @@ function renderKbCard(item){
     if (f.collocations && f.collocations.length) body += rowList("搭配", f.collocations);
     if (f.examples && f.examples.length) body += rowList("例句", f.examples);
   } else if (cat === "expressions"){
-    term = f.expression || "";
+    // 兼容三种结构：expression 型 / sentence 型 / word 型，避免空卡片
+    term = f.expression || f.sentence || f.word || f.originalForm || "";
     if (f.meaning) body += row("释义", f.meaning);
     if (f.usage) body += row("用法", f.usage);
     if (f.example) body += row("例句", f.example);
     if (f.similar && f.similar.length) body += rowList("近义", f.similar);
+    if (f.translation) body += row("译文", f.translation);
+    if (f.grammar) body += row("语法", f.grammar);
+    if (f.pattern) body += row("句型", f.pattern);
+    if (f.context) body += row("语境", f.context);
+    if (f.defs && f.defs.length) body += rowList("释义", f.defs.map(d => (d.text||"") + (d.dict ? (" ["+d.dict+"]") : "")));
+    if (f.examples && f.examples.length) body += rowList("例句", f.examples);
+    // 兜底：未被识别的其它字段也展示，绝不丢失数据
+    const knownE = new Set(["expression","sentence","word","originalForm","meaning","usage","example","similar","translation","grammar","pattern","context","defs","examples","lemma","pos","collocations","grammarRole","learningValue","lemmaConfirmed","verbInfo"]);
+    for (const [k,v] of Object.entries(f)){
+      if (!knownE.has(k) && v != null && v !== ""){
+        if (Array.isArray(v)) body += rowList(k, v.map(String));
+        else if (typeof v === "object") body += row(k, JSON.stringify(v));
+        else body += row(k, String(v));
+      }
+    }
   } else if (cat === "sentencePatterns"){
     term = f.sentence || "";
     if (f.translation) body += row("译文", f.translation);
@@ -471,17 +498,48 @@ function renderKbCard(item){
     if (f.structure && f.structure.length) body += rowList("结构", f.structure);
     if (f.grammar) body += row("语法", f.grammar);
     if (f.writingUsage) body += row("写作应用", f.writingUsage);
+  } else if (cat === "beautifulSentences" || cat === "sentences" || cat === "quotes"){
+    // 精彩句：默认只显示原句；点击卡片后展开显示 AI 分析
+    term = f.sentence || f.quote || f.text || f.title || f.expression || f.word || "";
+    // 把所有“分析类”字段放入可折叠区域
+    const a = [];
+    if (f.translation) a.push(row("译文", f.translation));
+    if (f.pattern) a.push(row("句型", f.pattern));
+    if (f.structure && f.structure.length) a.push(rowList("结构", f.structure));
+    if (f.grammar) a.push(row("语法", f.grammar));
+    if (f.writingUsage) a.push(row("写作应用", f.writingUsage));
+    if (f.meaning) a.push(row("释义", f.meaning));
+    if (f.usage) a.push(row("用法", f.usage));
+    if (f.example) a.push(row("例句", f.example));
+    if (f.similar && f.similar.length) a.push(rowList("近义", f.similar));
+    // 兜底：其它字段也放进分析区，保证数据不丢失
+    const knownB = new Set(["sentence","quote","text","title","expression","word","translation","pattern","structure","grammar","writingUsage","meaning","usage","example","similar"]);
+    for (const [k,v] of Object.entries(f)){
+      if (!knownB.has(k) && v != null && v !== ""){
+        if (Array.isArray(v)) a.push(rowList(k, v.map(String)));
+        else if (typeof v === "object") a.push(row(k, JSON.stringify(v)));
+        else a.push(row(k, String(v)));
+      }
+    }
+    detail = a.join("");
+    expandable = a.length > 0;
   } else {
+    // 通用分支（其他分类：批注 / 文学笔记 等）
     for (const [k,v] of Object.entries(f)){
       if (Array.isArray(v)) body += rowList(k, v.map(String));
       else if (typeof v === "object") body += row(k, JSON.stringify(v));
       else body += row(k, String(v));
     }
   }
-  return `<div class="kb-card">
+
+  const detailHtml = detail ? `<div class="kb-detail">${detail}</div>` : "";
+  const toggleHtml = expandable ? `<div class="kb-toggle">查看分析</div>` : "";
+  return `<div class="kb-card${expandable ? " kb-expandable" : ""}">
     <div class="kb-head"><span class="badge" style="background:${color}">${esc(label)}</span></div>
     <div class="kb-term">${esc(term)}</div>
     ${body}
+    ${detailHtml}
+    ${toggleHtml}
     <div class="kb-foot"><span>📖 ${esc(item.book||"")}${item.author?" · "+esc(item.author):""}</span><span>${fmtDate(item.createdAt)}</span></div>
   </div>`;
 }
@@ -558,7 +616,18 @@ async function reload(){
 
 (function init(){
   bindTabs();
-  document.getElementById("kb-search").addEventListener("input", e => { kbQ = e.target.value; renderKb(); });
+  const kbSearchEl = document.getElementById("kb-search");
+  if (kbSearchEl) { kbSearchEl.value = ""; setTimeout(() => { kbSearchEl.value = ""; }, 100); }
+  kbSearchEl.addEventListener("input", e => { kbQ = e.target.value; renderKb(); });
+  // 精彩句卡片：点击展开 / 收起 AI 分析
+  const kbListEl = document.getElementById("kb-list");
+  if (kbListEl) kbListEl.addEventListener("click", e => {
+    const card = e.target.closest(".kb-expandable");
+    if (!card) return;
+    card.classList.toggle("expanded");
+    const t = card.querySelector(".kb-toggle");
+    if (t) t.textContent = card.classList.contains("expanded") ? "收起分析" : "查看分析";
+  });
   document.getElementById("refresh-btn").addEventListener("click", () => { toast("刷新中…"); reload(); });
   document.getElementById("logout-btn").addEventListener("click", doSignOut);
   document.getElementById("btn-signin").addEventListener("click", doSignIn);
