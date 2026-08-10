@@ -4,7 +4,14 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
 <meta name="theme-color" content="#0f766e" />
-<title>LinguaReader · 手机端</title>
+<link rel="icon" type="image/png" href="favicon.png" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<link rel="manifest" href="manifest.webmanifest" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="LinguaReader" />
+<meta name="application-name" content="LinguaReader" />
+<title>LinguaReader · 手机端（云端）</title>
 <style>
   :root {
     --bg: #f4f6f8;
@@ -35,16 +42,15 @@
     box-shadow: var(--shadow);
     display: flex; align-items: center; gap: 10px;
   }
-  header h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: .3px; flex: 1; display: flex; align-items: center; min-width: 0; }
-  header h1 .title-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-  header .src { font-size: 12px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: rgba(255,255,255,.92); }
+  header h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: .3px; flex: 1; }
+  header .src { font-size: 11px; opacity: .9; margin-top: 2px; }
   .hbtn {
     background: rgba(255,255,255,.18); color: #fff; border: none; border-radius: 10px;
-    width: 38px; height: 38px; font-size: 18px; cursor: pointer; flex: 0 0 auto;
-    display: flex; align-items: center; justify-content: center;
+    height: 38px; padding: 0 12px; font-size: 14px; cursor: pointer; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: center; gap: 4px;
   }
   .hbtn:active { background: rgba(255,255,255,.32); }
-  .mode-pill { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: rgba(255,255,255,.22); margin-left: 6px; white-space: nowrap; display: inline-block; vertical-align: middle; flex: 0 0 auto; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  .mode-pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(255,255,255,.2); margin-left: 6px; }
 
   .tabs {
     position: sticky; top: 0; z-index: 19;
@@ -64,7 +70,6 @@
   .panel { display: none; }
   .panel.on { display: block; }
 
-  /* 搜索 + 分类 */
   .search {
     width: 100%; padding: 12px 14px; border: 1px solid var(--line);
     border-radius: 14px; background: var(--card); font-size: 15px; margin-bottom: 10px;
@@ -98,7 +103,6 @@
   .kb-filter-row { display: flex; gap: 10px; margin-top: 6px; }
   .kb-filter-col { flex: 1 1 0; min-width: 0; }
 
-  /* 知识库卡片 */
   .kb-card {
     background: var(--card); border: 1px solid var(--line); border-radius: 16px;
     padding: 14px 15px; margin-bottom: 12px; box-shadow: var(--shadow);
@@ -116,7 +120,6 @@
   ul.li li { margin: 2px 0; font-size: 13.5px; }
   .kb-foot { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); font-size: 12px; color: var(--sub); display: flex; justify-content: space-between; gap: 8px; }
 
-  /* 阅读时长 */
   .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
   .stat {
     background: var(--card); border: 1px solid var(--line); border-radius: 16px;
@@ -141,35 +144,73 @@
   .toast { position: fixed; left: 50%; bottom: 80px; transform: translateX(-50%); background: rgba(31,41,51,.92); color: #fff; padding: 10px 16px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity .25s; z-index: 50; pointer-events: none; max-width: 88%; }
   .toast.show { opacity: 1; }
 
-  /* 设置抽屉 */
-  .mask { position: fixed; inset: 0; background: rgba(15,23,42,.45); z-index: 60; display: none; }
-  .mask.on { display: block; }
-  .sheet {
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 61;
-    background: var(--card); border-radius: 18px 18px 0 0; padding: 18px 18px calc(20px + env(safe-area-inset-bottom));
-    box-shadow: 0 -4px 20px rgba(15,23,42,.18); transform: translateY(100%); transition: transform .25s;
+  /* 登录遮罩 */
+  .login-mask {
+    position: fixed; inset: 0; z-index: 100;
+    background: linear-gradient(160deg, #0f766e, #115e59);
+    display: flex; align-items: center; justify-content: center; padding: 24px;
   }
-  .sheet.on { transform: translateY(0); }
-  .sheet h3 { margin: 0 0 4px; font-size: 16px; }
-  .sheet p.tip { margin: 0 0 12px; font-size: 12px; color: var(--sub); line-height: 1.6; }
-  .sheet input {
-    width: 100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px;
+  .login-mask.hide { display: none; }
+  .login-card {
+    width: 100%; max-width: 360px; background: #fff; border-radius: 20px;
+    padding: 24px 22px; box-shadow: 0 12px 40px rgba(0,0,0,.25);
+  }
+  .login-card h2 { margin: 0 0 4px; font-size: 20px; color: var(--ink); }
+  .login-card p.tip { margin: 0 0 18px; font-size: 12.5px; color: var(--sub); line-height: 1.6; }
+  .login-card input {
+    width: 100%; padding: 13px 14px; border: 1px solid var(--line); border-radius: 12px;
     font-size: 15px; margin-bottom: 12px; background: var(--bg);
   }
-  .sheet .row { display: flex; gap: 10px; }
-  .sheet button { flex: 1; padding: 12px; border-radius: 12px; font-size: 15px; font-weight: 600; border: 1px solid var(--line); cursor: pointer; }
-  .sheet .primary { background: var(--brand); color: #fff; border-color: var(--brand); }
-  .sheet .ghost { background: var(--bg); color: var(--ink); }
+  .login-card .row { display: flex; gap: 10px; }
+  .login-card button { flex: 1; padding: 13px; border-radius: 12px; font-size: 15px; font-weight: 700; border: none; cursor: pointer; }
+  .login-card .primary { background: var(--brand); color: #fff; }
+  .login-card .ghost { background: var(--bg); color: var(--ink); border: 1px solid var(--line); }
+  .login-card .msg { margin-top: 12px; font-size: 12.5px; min-height: 16px; text-align: center; }
+  .login-card .msg.err { color: #c0392b; }
+  .login-card .msg.ok { color: #0f766e; }
 </style>
 </head>
 <body>
+
+<!-- 登录遮罩（未登录时显示） -->
+<div class="login-mask" id="login-mask">
+  <div class="login-card">
+    <h2>📖 LinguaReader 云端</h2>
+    <p class="tip">用你在电脑端「☁ 云同步」的同一个邮箱和密码登录，即可在手机查看实时知识库与阅读时长。</p>
+    <input id="email" type="email" placeholder="邮箱" autocomplete="username" />
+    <input id="pass" type="password" placeholder="密码（至少 6 位）" autocomplete="current-password" />
+    <div class="row">
+      <button class="ghost" id="btn-signup">注册</button>
+      <button class="primary" id="btn-signin">登录</button>
+    </div>
+    <div class="msg" id="login-msg"></div>
+    <button id="open-cfg-login" type="button" style="margin-top:12px;width:100%;background:none;border:none;color:var(--brand);text-decoration:underline;cursor:pointer;font-size:13px;padding:6px;">⚙ 配置云端 Supabase（自建，非作者云端）</button>
+  </div>
+</div>
+
+<!-- 配置 Supabase 模态框（自建云端，不连作者的项目） -->
+<div class="login-mask hide" id="cfg-modal">
+  <div class="login-card">
+    <h2>⚙ 配置你的 Supabase</h2>
+    <p class="tip">本页不内置任何人的云端。请到 supabase.com 免费注册并新建项目，把 <b>Project URL</b> 与 <b>publishable key</b> 粘贴到下方——只需填一次，保存在本机浏览器。</p>
+    <input id="cfg-url" type="text" placeholder="https://xxxx.supabase.co" autocomplete="off" />
+    <input id="cfg-key" type="text" placeholder="sb_publishable_..." autocomplete="off" />
+    <div class="row">
+      <button class="ghost" id="cfg-cancel" type="button">取消</button>
+      <button class="primary" id="cfg-save" type="button">保存</button>
+    </div>
+    <div class="msg" id="cfg-msg"></div>
+  </div>
+</div>
+
 <header>
-  <div style="flex:1;min-width:0">
-    <h1><span class="title-text">📖 LinguaReader · 手机端</span><span class="mode-pill" id="mode-pill">…</span></h1>
+  <div style="flex:1">
+    <h1>📖 LinguaReader<span class="mode-pill" id="mode-pill">…</span></h1>
     <div class="src" id="src">连接中…</div>
   </div>
   <button class="hbtn" id="refresh-btn" title="刷新">↻</button>
-  <button class="hbtn" id="gear-btn" title="设置后端地址">⚙</button>
+  <button class="hbtn" id="cfg-btn" title="配置 Supabase">⚙</button>
+  <button class="hbtn" id="logout-btn" title="退出登录">退出</button>
 </header>
 
 <div class="tabs">
@@ -179,7 +220,7 @@
 
 <div class="wrap">
   <section class="panel on" id="panel-kb">
-    <input class="search" id="kb-search" type="search" placeholder="🔍 搜索词条 / 书名 / 释义…" autocomplete="off" />
+    <input class="search" id="kb-search" type="search" placeholder="🔍 搜索词条 / 书名 / 释义…" />
     <div class="kb-filter-row">
       <div class="kb-filter-col">
         <div class="kb-filter-label">🗂 分类</div>
@@ -213,27 +254,27 @@
 </div>
 
 <footer>
-  本页为<b>纯实时</b>模式，数据始终来自你的 LinguaReader 后端（电脑端服务），不加载任何快照。<br/>
-  手机须与电脑同一 WiFi，点右上角 ⚙ 填电脑局域网地址（形如 <b>http://192.168.x.x:3007</b>）。<br/>
-  未配置且非同源打开时显示「离线」。
+  本页为<b>云端实时</b>模式，数据来自你的 Supabase 云端库（与电脑端「☁ 云同步」同一账号）。<br/>
+  电脑端新增或改动后，手机端会在数秒内自动刷新。
 </footer>
 <div class="toast" id="toast"></div>
 
-<!-- 设置抽屉 -->
-<div class="mask" id="mask"></div>
-<div class="sheet" id="sheet">
-  <h3>⚙ 后端地址</h3>
-  <p class="tip">本页只显示实时数据，不加载快照。<br/>手机与电脑同一 WiFi 时，填电脑局域网地址，形如 <b>http://192.168.1.50:3007</b>（不含末尾斜杠）。留空则用当前页面地址作后端（在电脑端服务地址打开即实时）。若后端设了访问令牌，一并填入。</p>
-  <input id="backend-input" type="url" placeholder="http://192.168.1.50:3007" />
-  <input id="token-input" type="text" placeholder="访问令牌（后端设了 LR_TOKEN 才需要）" style="margin-top:10px" />
-  <div class="row">
-    <button class="ghost" id="backend-clear">恢复默认</button>
-    <button class="primary" id="backend-save">保存并刷新</button>
-  </div>
-</div>
-
+<!-- Supabase JS（CDN） -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-/* ---------- 常量 ---------- */
+/* ============ Supabase 配置 ============
+   内置默认（开箱即用）：公开 publishable key，安全由 RLS 保证；
+   若 localStorage 存有 lr_supabase_config，则以用户自填值覆盖。 */
+let SUPABASE_URL = "https://cahvpriysdpdsovietvt.supabase.co";
+let SUPABASE_ANON_KEY = "sb_publishable_-agoqiFvDoySm60z1_r-iw_4nJDszn9";
+(function () {
+  try {
+    const raw = localStorage.getItem("lr_supabase_config");
+    if (raw) { const c = JSON.parse(raw); if (c && c.url && c.key) { SUPABASE_URL = c.url; SUPABASE_ANON_KEY = c.key; } }
+  } catch (e) {}
+})();
+
+/* ============ 常量（与桌面端同步模块一致） ============ */
 const CAT_LABELS = {
   vocabulary: "词汇", expressions: "表达", sentencePatterns: "句型",
   beautifulSentences: "精彩句", writingMaterials: "写作素材",
@@ -244,25 +285,21 @@ const CAT_COLORS = {
   beautifulSentences: "#c2185b", writingMaterials: "#ef6c00",
   literary: "#455a64", annotation: "#00838f"
 };
-const BACKEND_KEY = "lr_mobile_backend";
 
-/* ---------- 后端地址（默认同源；可在设置里改成电脑局域网 IP 或公网后端） ---------- */
-function getBackend(){
-  try { const v = localStorage.getItem(BACKEND_KEY); if (v && v.trim()) return v.trim().replace(/\/+$/,""); } catch(e){}
-  return location.origin; // 同源：在 http://<电脑IP>:3007/mobile/ 打开即实时
-}
-function setBackend(v){
-  try { if (v && v.trim()) localStorage.setItem(BACKEND_KEY, v.trim().replace(/\/+$/,"")); else localStorage.removeItem(BACKEND_KEY); } catch(e){}
-}
-function setSrc(text){ const el=document.getElementById("src"); if(el) el.textContent=text; }
+/* ============ 状态 ============ */
+let DATA = null;
+let client = null;
+let uid = null;
+let userEmail = "";
+
+/* ============ 工具 ============ */
+function setSrc(t){ const el=document.getElementById("src"); if(el) el.textContent=t; }
 function setMode(m){
   const pill=document.getElementById("mode-pill");
-  const map={ live:["● 实时","#bbf7d0"], offline:["⚠ 离线","#fecaca"] };
+  const map={ live:["● 实时","#bbf7d0"], conn:["连接中","#fef9c3"], login:["未登录","#fecaca"] };
   const [t,c]=map[m]||["…","#e5e7eb"];
   pill.textContent=t; pill.style.background=c;
 }
-
-/* ---------- 工具 ---------- */
 function fmtDur(sec){
   sec = Math.round(sec || 0);
   if (sec < 60) return sec + " 秒";
@@ -275,36 +312,110 @@ function fmtDate(iso){ try { const d = new Date(iso); const p = n => String(n).p
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 function toast(msg){ const el=document.getElementById("toast"); el.textContent=msg; el.classList.add("show"); clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove("show"),2200); }
 
-/* ---------- 数据加载（纯实时，无快照） ---------- */
-let DATA = null;
-let MODE = "";
-async function loadData(){
-  const base = getBackend();
-  // 仅实时拉取后端 /api/state；失败时直接离线，绝不回退到任何快照
-  try {
-    const token = (() => { try { return localStorage.getItem("lr_token") || ""; } catch(e){ return ""; } })();
-    const url = base + "/api/state" + (token ? ("?token=" + encodeURIComponent(token)) : "");
-    const r = await fetch(url, { cache: "no-store" });
-    if (r.ok) {
-      const j = await r.json();
-      if (j && Array.isArray(j.kb)) {
-        MODE = "live"; setMode("live");
-        setSrc("实时 · " + base.replace(/^https?:\/\//,""));
-        return j;
-      }
-    } else if (r.status === 401) {
-      MODE = "offline"; setMode("offline");
-      setSrc("离线：后端要求访问令牌，点 ⚙ 填入");
-      return null;
-    }
-  } catch(e){ /* 网络 / CORS 不通 → 离线 */ }
-
-  MODE = "offline"; setMode("offline");
-  setSrc("离线：连不上后端，点 ⚙ 设置电脑局域网地址");
-  return null;
+/* ============ Supabase 客户端 ============ */
+function initClient(){
+  if (!window.supabase || !window.supabase.createClient){ toast("Supabase 加载失败（请检查网络）"); return false; }
+  client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  return true;
 }
 
-/* ---------- 知识库渲染 ---------- */
+/* ============ 登录 / 注册 ============ */
+function showLogin(show){ document.getElementById("login-mask").classList.toggle("hide", !show); }
+function setLoginMsg(msg, kind){ const el=document.getElementById("login-msg"); el.textContent=msg||""; el.className="msg"+(kind?(" "+kind):""); }
+
+async function doSignUp(){
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY){ setLoginMsg("请先点 ⚙ 配置你的 Supabase", "err"); openCfg(); return; }
+  if (!client) return;
+  const email = document.getElementById("email").value.trim();
+  const pass = document.getElementById("pass").value;
+  if (!email || pass.length < 6){ setLoginMsg("请输入邮箱与至少 6 位密码", "err"); return; }
+  setLoginMsg("注册中…");
+  const { data, error } = await client.auth.signUp({ email, password: pass });
+  if (error){ setLoginMsg("注册失败：" + error.message, "err"); return; }
+  if (data.session){
+    onAuth(data.user.id, email);
+  } else {
+    setLoginMsg("注册成功，请到邮箱点击验证链接后再登录", "ok");
+  }
+}
+async function doSignIn(){
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY){ setLoginMsg("请先点 ⚙ 配置你的 Supabase", "err"); openCfg(); return; }
+  if (!client) return;
+  const email = document.getElementById("email").value.trim();
+  const pass = document.getElementById("pass").value;
+  if (!email || pass.length < 6){ setLoginMsg("请输入邮箱与至少 6 位密码", "err"); return; }
+  setLoginMsg("登录中…");
+  const { data, error } = await client.auth.signInWithPassword({ email, password: pass });
+  if (error){ setLoginMsg("登录失败：" + error.message, "err"); return; }
+  onAuth(data.user.id, email);
+}
+async function doSignOut(){
+  if (client){ try { await client.auth.signOut(); } catch(e){} }
+  uid = null; userEmail = "";
+  setMode("login"); setSrc("未登录");
+  showLogin(true);
+  toast("已退出登录");
+}
+function onAuth(id, email){
+  uid = id; userEmail = email || "";
+  showLogin(false);
+  setMode("conn"); setSrc("连接中 · " + (email||""));
+  subscribeRealtime();
+  reload();
+}
+
+/* ============ 自建 Supabase 配置 ============ */
+function openCfg(){
+  const u = document.getElementById("cfg-url"), k = document.getElementById("cfg-key");
+  if (u && SUPABASE_URL) u.value = SUPABASE_URL;
+  if (k && SUPABASE_ANON_KEY) k.value = SUPABASE_ANON_KEY;
+  const m = document.getElementById("cfg-modal"), lm = document.getElementById("login-mask");
+  if (m) m.classList.remove("hide");
+  if (lm) lm.classList.add("hide");
+}
+function closeCfg(){
+  const m = document.getElementById("cfg-modal"); if (m) m.classList.add("hide");
+  if (!uid){ const lm = document.getElementById("login-mask"); if (lm) lm.classList.remove("hide"); }
+}
+function saveCfg(){
+  const u = document.getElementById("cfg-url"), k = document.getElementById("cfg-key"), msg = document.getElementById("cfg-msg");
+  if (!u || !k) return;
+  if (!u.value.trim() || !k.value.trim()){ if (msg){ msg.textContent="请填写 URL 与 Key"; msg.className="msg err"; } return; }
+  localStorage.setItem("lr_supabase_config", JSON.stringify({ url: u.value.trim(), key: k.value.trim() }));
+  SUPABASE_URL = u.value.trim(); SUPABASE_ANON_KEY = k.value.trim();
+  initClient();
+  if (msg){ msg.textContent="✓ 已保存，正在连接…"; msg.className="msg ok"; }
+  setTimeout(() => {
+    closeCfg();
+    if (client){ client.auth.getSession().then(({ data }) => {
+      if (data && data.session && data.session.user){ onAuth(data.session.user.id, data.session.user.email || ""); }
+      else { setMode("login"); setSrc("请登录云端账号"); showLogin(true); }
+    }).catch(() => { setMode("login"); setSrc("请登录云端账号"); showLogin(true); }); }
+  }, 700);
+}
+
+/* ============ 实时订阅（桌面端改动后数秒自动刷新） ============ */
+function subscribeRealtime(){
+  if (!client || !uid) return;
+  try {
+    client.channel("lr-kb-" + uid)
+      .on("postgres_changes", { event: "*", schema: "public", table: "kb_store", filter: "user_id=eq." + uid }, () => {
+        toast("云端数据已更新");
+        reload();
+      })
+      .subscribe();
+  } catch(e){ console.warn("realtime 订阅失败：", e); }
+}
+
+/* ============ 数据加载（Supabase 直读，无后端） ============ */
+async function loadData(){
+  if (!client || !uid) return null;
+  const { data, error } = await client.from("kb_store").select("payload").eq("user_id", uid).maybeSingle();
+  if (error) { console.warn("读取云端失败：", error.message); return null; }
+  return (data && data.payload) ? data.payload : null;
+}
+
+/* ============ 知识库渲染 ============ */
 let kbCat = "all", kbQ = "", kbBook = "";
 function renderKbCats(){
   const cats = Array.from(new Set((DATA.kb||[]).map(x => x.category)));
@@ -345,8 +456,7 @@ function renderKbCard(item){
   const color = CAT_COLORS[cat] || "#0f766e";
   const label = CAT_LABELS[cat] || cat;
   const f = item.fields || {};
-  // 统一兜底主标题：任何分类（含佳句 / 文学笔记等通用分支）都能从常见字段提取，
-  // 避免主标题为空看起来像空白卡片。各专属分支会再用更精确的规则覆盖。
+  // 统一兜底主标题：任何分类都能从常见字段提取，避免空白卡片
   let term = f.expression || f.sentence || f.word || f.originalForm || f.quote || f.text || f.title || "";
   let body = "";
   if (cat === "vocabulary"){
@@ -358,26 +468,21 @@ function renderKbCard(item){
   } else if (cat === "expressions"){
     // 表达库兼容 3 种字段结构：expression 型 / sentence 型 / word(词汇)型
     term = f.expression || f.sentence || f.word || f.originalForm || "";
-    // expression 型
     if (f.meaning) body += row("释义", f.meaning);
     if (f.usage) body += row("用法", f.usage);
     if (f.example) body += row("例句", f.example);
     if (f.similar && f.similar.length) body += rowList("近义", f.similar);
-    // sentence 型
     if (f.translation) body += row("译文", f.translation);
-    if (f.structure && f.structure.length) body += rowList("结构", f.structure);
+    if (f.structure) body += (Array.isArray(f.structure) ? rowList("结构", f.structure) : row("结构", f.structure));
     if (f.grammar) body += row("语法", f.grammar);
     if (f.pattern) body += row("句型", f.pattern);
     if (f.writingUsage) body += row("写作应用", f.writingUsage);
-    // word(词汇)型
-    if (f.defs && f.defs.length) {
-      f.defs.forEach(d => { body += `<div class="def"><span class="dict">${esc(d.dict||"")}</span>${esc(d.text||"")}</div>`; });
-    }
+    if (f.defs && f.defs.length) body += rowList("释义", f.defs.map(d => (d.text || String(d))));
     if (f.context) body += row("语境", f.context);
-    if (f.lemma) body += row("原型", f.lemma);
-    if (f.pos) body += row("词性", f.pos);
     if (f.collocations && f.collocations.length) body += rowList("搭配", f.collocations);
     if (f.examples && f.examples.length) body += rowList("例句", f.examples);
+    if (f.lemma) body += row("原型", f.lemma);
+    if (f.pos) body += row("词性", f.pos);
     if (f.grammarRole) body += row("句法角色", f.grammarRole);
   } else if (cat === "sentencePatterns"){
     term = f.sentence || "";
@@ -413,7 +518,7 @@ function renderKbCard(item){
 function row(k,v){ return `<div class="kb-row"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`; }
 function rowList(k,arr){ return `<div class="kb-row"><div class="k">${esc(k)}</div><ul class="li">${arr.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`; }
 
-/* ---------- 阅读时长渲染 ---------- */
+/* ============ 阅读时长渲染 ============ */
 function renderStats(){
   const r = DATA.reading || {};
   const secById = r.seconds || {};
@@ -464,7 +569,7 @@ function renderStats(){
   document.getElementById("st-checkin").textContent = n + " 天";
 }
 
-/* ---------- 初始化 ---------- */
+/* ============ 初始化 ============ */
 function bindTabs(){
   document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));
@@ -477,29 +582,36 @@ function renderAll(){ renderKbCats(); renderKbBooks(); renderKb(); renderStats()
 
 async function reload(){
   DATA = await loadData();
-  if (!DATA){ toast("数据加载失败"); return; }
+  if (!DATA){ if (uid) toast("云端暂无数据，请先在电脑端登录云同步"); return; }
   renderAll();
 }
-
-/* 设置抽屉 */
-function openSheet(){
-  document.getElementById("backend-input").value = getBackend()===location.origin ? "" : getBackend();
-  try { document.getElementById("token-input").value = localStorage.getItem("lr_token") || ""; } catch(e){}
-  document.getElementById("mask").classList.add("on"); document.getElementById("sheet").classList.add("on");
-}
-function closeSheet(){ document.getElementById("mask").classList.remove("on"); document.getElementById("sheet").classList.remove("on"); }
-function setToken(v){ try { if (v && v.trim()) localStorage.setItem("lr_token", v.trim()); else localStorage.removeItem("lr_token"); } catch(e){} }
 
 (function init(){
   bindTabs();
   document.getElementById("kb-search").addEventListener("input", e => { kbQ = e.target.value; renderKb(); });
   document.getElementById("refresh-btn").addEventListener("click", () => { toast("刷新中…"); reload(); });
-  document.getElementById("gear-btn").addEventListener("click", openSheet);
-  document.getElementById("mask").addEventListener("click", closeSheet);
-  document.getElementById("backend-clear").addEventListener("click", () => { setBackend(""); setToken(""); closeSheet(); toast("已恢复默认，刷新中…"); reload(); });
-  document.getElementById("backend-save").addEventListener("click", () => { const v=document.getElementById("backend-input").value.trim(); const t=document.getElementById("token-input").value.trim(); setBackend(v); setToken(t); closeSheet(); toast("已保存，刷新中…"); reload(); });
+  document.getElementById("logout-btn").addEventListener("click", doSignOut);
+  document.getElementById("btn-signin").addEventListener("click", doSignIn);
+  document.getElementById("btn-signup").addEventListener("click", doSignUp);
+  const cfgBtn = document.getElementById("cfg-btn"); if (cfgBtn) cfgBtn.addEventListener("click", openCfg);
+  const cfgCancel = document.getElementById("cfg-cancel"); if (cfgCancel) cfgCancel.addEventListener("click", closeCfg);
+  const cfgSave = document.getElementById("cfg-save"); if (cfgSave) cfgSave.addEventListener("click", saveCfg);
+  const openCfgLogin = document.getElementById("open-cfg-login"); if (openCfgLogin) openCfgLogin.addEventListener("click", openCfg);
 
-  reload();
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY){
+    setMode("login"); setSrc("请先配置云端 ☁"); showLogin(true);
+    return;
+  }
+  if (!initClient()){ setMode("login"); setSrc("Supabase 加载失败"); showLogin(true); return; }
+
+  // 尝试恢复已有登录态
+  client.auth.getSession().then(({ data }) => {
+    if (data && data.session && data.session.user){
+      onAuth(data.session.user.id, data.session.user.email || "");
+    } else {
+      setMode("login"); setSrc("请登录云端账号"); showLogin(true);
+    }
+  }).catch(() => { setMode("login"); setSrc("请登录云端账号"); showLogin(true); });
 })();
 </script>
 </body>
